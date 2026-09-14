@@ -1,0 +1,59 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mokit"
+version = "0.1.0"
+description = "MOKIT: Model Optimization Kit for Inference and Training"
+requires-python = ">=3.14"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Shuyang Cao", email = "shuyang.cao@outlook.com" },
+]
+keywords = [
+    "model optimization",
+    "inference",
+    "training",
+    "pytorch",
+    "deep learning",
+    "machine learning",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# The PyTorch distribution on PyPI is named `torch`; `pytorch` is an unrelated
+# stub package. On Linux, `pip install torch` already resolves to the CUDA build;
+# pass `--index-url https://download.pytorch.org/whl/cpu` to get a CPU-only wheel.
+dependencies = [
+    "torch>=2.14",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.9",
+    "pre-commit>=4",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["mokit"]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.pytest.ini_options]
+minversion = "8"
+testpaths = ["tests"]
+# Lets the tests import the package from the repo root without installing it first.
+pythonpath = ["."]
+addopts = ["-ra", "--strict-markers", "--strict-config"]
