@@ -1,0 +1,37 @@
+# Run `pre-commit install` once to wire this into .git/hooks/pre-commit.
+# Run `pre-commit run --all-files` to check (and autofix) the whole tree.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      # LICENSES/ holds canonical SPDX texts. They must stay byte-exact, or license
+      # scanners stop recognising them -- the canonical BSD-3-Clause has a trailing
+      # space on line 1, which trailing-whitespace would otherwise strip.
+      - id: trailing-whitespace
+        exclude: ^LICENSES/
+      - id: end-of-file-fixer
+        exclude: ^LICENSES/
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      # Catches an accidentally committed .pt / .safetensors / .ckpt.
+      # Raise the ceiling via `args: [--maxkb=...]` if a fixture legitimately exceeds 500 KB.
+      - id: check-added-large-files
+      - id: debug-statements
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    # Keep in sync with the `ruff==` pin in pyproject.toml's dev group, so the
+    # hook and a local `ruff` invocation agree on what passes.
+    rev: v0.16.7
+    hooks:
+      # Check runs before format: --fix applies safe fixes, then format normalizes layout.
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/fsfe/reuse-tool
+    # Checks every file carries SPDX copyright + license tags, and that each
+    # referenced license has its canonical text in LICENSES/.
+    rev: v6.2.0
+    hooks:
+      - id: reuse
