@@ -1,11 +1,17 @@
 version = 1
 
-# Config/metadata files where an inline SPDX header is noise. Licensing for
-# these is declared here instead. Source files in mokit/ still carry their own
-# inline header, which is the point of the exercise -- this only covers the
-# files where a header would be clutter.
+# Files where an inline SPDX header is noise: config, metadata, and docs.
+# Licensing for these is declared here instead. Source files in mokit/ still
+# carry their own inline header, which is the point of the exercise -- this
+# only covers files where a header would be clutter.
 [[annotations]]
-path = [".gitignore", "pyproject.toml", ".pre-commit-config.yaml", "REUSE.toml"]
+path = [
+    ".gitignore",
+    "pyproject.toml",
+    ".pre-commit-config.yaml",
+    "REUSE.toml",
+    "CLAUDE.md",
+]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 CaoSY"
 SPDX-License-Identifier = "BSD-3-Clause"
