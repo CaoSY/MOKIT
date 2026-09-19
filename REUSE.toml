@@ -1,9 +1,6 @@
 version = 1
 
-# Files where an inline SPDX header is noise: config, metadata, and docs.
-# Licensing for these is declared here instead. Source files in mokit/ still
-# carry their own inline header, which is the point of the exercise -- this
-# only covers files where a header would be clutter.
+# Files covered here instead of carrying an inline SPDX header.
 [[annotations]]
 path = [
     ".gitignore",
