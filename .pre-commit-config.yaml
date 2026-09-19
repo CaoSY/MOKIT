@@ -1,37 +1,74 @@
-# Run `pre-commit install` once to wire this into .git/hooks/pre-commit.
-# Run `pre-commit run --all-files` to check (and autofix) the whole tree.
+# Hooks run in the active dev environment (`language: system`), not isolated
+# pre-commit envs. Tool versions are pinned only in pyproject.toml's dev group.
+default_install_hook_types: [pre-commit, pre-push]
+
 repos:
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v6.0.0
+  - repo: local
     hooks:
-      # LICENSES/ holds canonical SPDX texts. They must stay byte-exact, or license
-      # scanners stop recognising them -- the canonical BSD-3-Clause has a trailing
-      # space on line 1, which trailing-whitespace would otherwise strip.
+      # LICENSES/ holds canonical SPDX texts that must stay byte-exact.
       - id: trailing-whitespace
+        name: trim trailing whitespace
+        entry: trailing-whitespace-fixer
+        language: system
+        types: [text]
         exclude: ^LICENSES/
       - id: end-of-file-fixer
+        name: fix end of files
+        entry: end-of-file-fixer
+        language: system
+        types: [text]
         exclude: ^LICENSES/
       - id: check-yaml
+        name: check yaml
+        entry: check-yaml
+        language: system
+        types: [yaml]
       - id: check-toml
+        name: check toml
+        entry: check-toml
+        language: system
+        types: [toml]
       - id: check-merge-conflict
-      # Catches an accidentally committed .pt / .safetensors / .ckpt.
-      # Raise the ceiling via `args: [--maxkb=...]` if a fixture legitimately exceeds 500 KB.
+        name: check for merge conflicts
+        entry: check-merge-conflict
+        language: system
+        types: [text]
       - id: check-added-large-files
+        name: check for added large files
+        entry: check-added-large-files
+        language: system
       - id: debug-statements
+        name: debug statements (python)
+        entry: debug-statement-hook
+        language: system
+        types: [python]
 
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    # Keep in sync with the `ruff==` pin in pyproject.toml's dev group, so the
-    # hook and a local `ruff` invocation agree on what passes.
-    rev: v0.16.7
-    hooks:
-      # Check runs before format: --fix applies safe fixes, then format normalizes layout.
       - id: ruff-check
+        name: ruff check
+        entry: ruff check --force-exclude
+        language: system
         args: [--fix]
+        types_or: [python, pyi, jupyter]
+        require_serial: true
       - id: ruff-format
+        name: ruff format
+        entry: ruff format --force-exclude
+        language: system
+        types_or: [python, pyi, jupyter, markdown]
+        require_serial: true
 
-  - repo: https://github.com/fsfe/reuse-tool
-    # Checks every file carries SPDX copyright + license tags, and that each
-    # referenced license has its canonical text in LICENSES/.
-    rev: v6.2.0
-    hooks:
       - id: reuse
+        name: reuse lint
+        entry: reuse
+        language: system
+        args: [lint]
+        pass_filenames: false
+
+      # Types and annotations, checked identically before commit and push.
+      - id: pyrefly
+        name: pyrefly
+        entry: pyrefly check
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit, pre-push]
