@@ -49,7 +49,12 @@ target-version = "py314"
 line-length = 120
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "D"]
+# D211/D212 are the mutually exclusive partners of D203/D213; selecting both
+# makes ruff flag the pair as incompatible and pick for us. We keep D203 (blank
+# line before a class docstring) and D213 (multi-line summary on the second
+# line).
+ignore = ["D211", "D212"]
 
 [tool.pytest.ini_options]
 minversion = "8"
