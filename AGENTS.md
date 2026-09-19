@@ -6,34 +6,23 @@ Flat layout: the package is `mokit/`, tests are in `tests/`.
 This file is the source of truth for agent instructions. `CLAUDE.md` imports it
 so Claude Code and other tools share one copy.
 
-## Definition of done
+## What to keep in mind
 
-A task is **not complete** until this passes. Verify it — do not assume it:
+Write these as you write the code, not as a cleanup pass.
 
-```
-pre-commit run --all-files
-```
-
-If it modifies files, re-stage and run it again. Say in your summary that it
-passed. Do not report a task finished while this is failing.
-
-Two of the things it checks should be written *as you go*, not fixed up at the
-end:
-
-### 1. SPDX header — every new source file
+### SPDX header — every new source file
 
 ```
 # SPDX-FileCopyrightText: 2026 CaoSY
 # SPDX-License-Identifier: BSD-3-Clause
 ```
 
-`reuse lint` fails without it. Put the header after any shebang and before a
-module docstring.
+Put it after any shebang and before a module docstring.
 
 The year is the year **that file** was created. Do not copy it from an existing
 file — a file added in 2030 says 2030, not 2026.
 
-### 2. Docstrings — every public module, class, and function/method
+### Docstrings — every public module, class, and function/method
 
 ```python
 def quantize(tensor, scale):
@@ -52,13 +41,20 @@ def quantize(tensor, scale):
     """
 ```
 
-Enforced by ruff's `D` rules. The conventions are not the defaults:
-
 - Functions and methods: summary in the **imperative mood** — "Add two numbers.",
-  not "Adds two numbers." (`D401`)
-- Multi-line docstrings: summary on the **second** line, not the first (`D213`)
-- Class docstrings: a **blank line** before them (`D203`)
+  not "Adds two numbers."
+- Multi-line docstrings: summary on the **second** line, not the first
+- Class docstrings: a **blank line** before them
 - Document every parameter, return value, and raised exception
 
-Modules and classes are not checked for imperative mood — a noun phrase like
-"Utilities for tensor quantization." is correct there.
+Modules and classes read as a noun phrase rather than an instruction: "Utilities
+for tensor quantization."
+
+### Type annotations — every function and method
+
+```python
+def quantize(tensor: torch.Tensor, scale: torch.Tensor) -> torch.Tensor: ...
+```
+
+Annotate every parameter and return type, and make them accurate — look a type up
+rather than guessing, since a wrong annotation is worse than none.
