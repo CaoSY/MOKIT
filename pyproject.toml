@@ -54,8 +54,8 @@ line-length = 120
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "D"]
-# D211/D212 are the mutually exclusive partners of D203/D213; this keeps the latter.
-ignore = ["D211", "D212"]
+# D203 conflicts with `ruff format`; D212 is the partner of D213, which this keeps.
+ignore = ["D203", "D212"]
 
 [tool.pyrefly]
 # Read by the pyrefly pre-commit hook at both commit and push.
