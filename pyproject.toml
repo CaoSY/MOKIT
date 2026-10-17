@@ -6,6 +6,7 @@ build-backend = "hatchling.build"
 name = "mokit"
 version = "0.1.0"
 description = "MOKIT: Model Optimization Kit for Inference and Training"
+readme = "README.md"
 requires-python = ">=3.14"
 license = "BSD-3-Clause"
 license-files = ["LICENSE"]
