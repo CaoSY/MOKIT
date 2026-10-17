@@ -6,6 +6,11 @@ Flat layout: the package is `mokit/`, tests are in `tests/`.
 This file is the source of truth for agent instructions. `CLAUDE.md` imports it
 so Claude Code and other tools share one copy.
 
+## Git
+
+`main` is protected: direct pushes are rejected. Create a branch, push it, and
+open a pull request. Do not attempt to push to `main`.
+
 ## What to keep in mind
 
 Write these as you write the code, not as a cleanup pass.
