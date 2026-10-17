@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      # CPU-only: pyrefly needs `import torch` to resolve, and CI has no GPU.
+      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - run: pip install --group dev -e .
+
+      - run: pre-commit run --all-files

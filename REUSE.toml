@@ -10,6 +10,7 @@ path = [
     "README.md",
     "AGENTS.md",
     "CLAUDE.md",
+    ".github/workflows/ci.yml",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 CaoSY"
