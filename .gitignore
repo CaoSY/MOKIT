@@ -219,3 +219,6 @@ __marimo__/
 
 # Agent
 .claude/settings.local.json
+
+# Editor
+.vscode/
