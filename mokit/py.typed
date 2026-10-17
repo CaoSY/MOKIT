@@ -1,0 +1,4 @@
+# SPDX-FileCopyrightText: 2026 CaoSY
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# Marker file for PEP 561. MOKIT ships inline type annotations.
