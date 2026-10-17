@@ -3,8 +3,9 @@
 
 """Core utilities for MOKIT."""
 
+from dataclasses import dataclass
 
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class MokitConfigBase:
     """The base class for all MOKIT config classes."""
-
-    pass
