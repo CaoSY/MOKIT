@@ -26,7 +26,7 @@ class FloatFormat(MokitConfigBase):
         elem_dtype: Data type of the quantized elements. Must be one of ``REDUCED_PRECISION_DTYPES``.
             Defaults to ``torch.float8_e4m3fn``.
 
-        round_mode: Rounding mode used when casting high-precision values to ``elem_dtype``. See
+        rounding_mode: Rounding mode used when casting high-precision values to ``elem_dtype``. See
             ``QuantizationRoundingMode`` for the available modes. Defaults to ``QuantizationRoundingMode.RNE``.
 
         scale_dtype: Data type of the scale. Must be one of ``HIGH_PRECISION_DTYPES``;
@@ -37,7 +37,7 @@ class FloatFormat(MokitConfigBase):
     """
 
     elem_dtype: Final[torch.dtype] = torch.float8_e4m3fn
-    round_mode: Final[QuantizationRoundingMode] = QuantizationRoundingMode.RNE
+    rounding_mode: Final[QuantizationRoundingMode] = QuantizationRoundingMode.RNE
     scale_dtype: Final[torch.dtype] = torch.float32
     granularity: Final[Granularity] = DEFAULT_GRANULARITY
 
@@ -46,8 +46,8 @@ class FloatFormat(MokitConfigBase):
         if self.elem_dtype not in REDUCED_PRECISION_DTYPES:
             raise ValueError(f"elem_dtype must be one of {REDUCED_PRECISION_DTYPES}, got {self.elem_dtype}")
 
-        if not isinstance(self.round_mode, QuantizationRoundingMode):
-            raise ValueError(f"round_mode must be of type QuantizationRoundingMode, got {type(self.round_mode)}")
+        if not isinstance(self.rounding_mode, QuantizationRoundingMode):
+            raise ValueError(f"rounding_mode must be of type QuantizationRoundingMode, got {type(self.rounding_mode)}")
 
         if self.scale_dtype is torch.float8_e8m0fnu:
             raise ValueError(f"If the scale's dtype is {torch.float8_e8m0fnu}, use MXFormat instead.")

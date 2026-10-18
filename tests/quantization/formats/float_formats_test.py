@@ -26,10 +26,10 @@ def test_unsupported_elem_dtype() -> None:
         FloatFormat(elem_dtype=torch.float16)
 
 
-def test_invalid_round_mode() -> None:
+def test_invalid_rounding_mode() -> None:
     """Test that a non-QuantizationRoundingMode round mode is rejected."""
-    with pytest.raises(ValueError, match="round_mode"):
-        FloatFormat(round_mode=cast(QuantizationRoundingMode, "rne"))
+    with pytest.raises(ValueError, match="rounding_mode"):
+        FloatFormat(rounding_mode=cast(QuantizationRoundingMode, "rne"))
 
 
 def test_mx_scale_dtype_is_rejected() -> None:

@@ -62,7 +62,7 @@ class MXFormat(MokitConfigBase):
         elem_dtype: Data type of the quantized elements. Must be one of ``MX_ELEM_DTYPES``. Defaults to
             ``torch.float8_e4m3fn``.
 
-        round_mode: Rounding mode used when casting high-precision values to ``elem_dtype``. See
+        rounding_mode: Rounding mode used when casting high-precision values to ``elem_dtype``. See
             ``QuantizationRoundingMode`` for the available modes. Defaults to ``QuantizationRoundingMode.RNE``.
 
         elem_dtype_max: the reference dtype maximum when calculating scales. A float for floating dtypes and an
@@ -80,7 +80,7 @@ class MXFormat(MokitConfigBase):
     """
 
     elem_dtype: Final[torch.dtype] = torch.float8_e4m3fn
-    round_mode: Final[QuantizationRoundingMode] = QuantizationRoundingMode.RNE
+    rounding_mode: Final[QuantizationRoundingMode] = QuantizationRoundingMode.RNE
     elem_dtype_max: Final[float | int | None] = None
 
     scale_dtype: Final[torch.dtype] = MX_SCALE_DTYPE
@@ -93,8 +93,8 @@ class MXFormat(MokitConfigBase):
         if self.elem_dtype not in MX_ELEM_DTYPES:
             raise ValueError(f"Supported element dtypes are {MX_ELEM_DTYPES}, got {self.elem_dtype}")
 
-        if not isinstance(self.round_mode, QuantizationRoundingMode):
-            raise ValueError(f"round_mode must be a QuantizationRoundingMode, got {type(self.round_mode)}")
+        if not isinstance(self.rounding_mode, QuantizationRoundingMode):
+            raise ValueError(f"rounding_mode must be a QuantizationRoundingMode, got {type(self.rounding_mode)}")
 
         if self.elem_dtype_max is None:
             if self.elem_dtype is torch.float4_e2m1fn_x2:

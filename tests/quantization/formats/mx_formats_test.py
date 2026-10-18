@@ -59,10 +59,10 @@ def test_unsupported_elem_dtype(cls: type[MXFormat]) -> None:
 
 
 @pytest.mark.parametrize("cls", MX_FORMAT_CLASSES)
-def test_invalid_round_mode(cls: type[MXFormat]) -> None:
+def test_invalid_rounding_mode(cls: type[MXFormat]) -> None:
     """Test that a non-QuantizationRoundingMode round mode is rejected."""
-    with pytest.raises(ValueError, match="round_mode"):
-        cls(round_mode=cast(QuantizationRoundingMode, "rne"))
+    with pytest.raises(ValueError, match="rounding_mode"):
+        cls(rounding_mode=cast(QuantizationRoundingMode, "rne"))
 
 
 @pytest.mark.parametrize("cls", MX_FORMAT_CLASSES)
