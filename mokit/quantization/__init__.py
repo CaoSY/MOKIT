@@ -18,3 +18,4 @@ FP8_DTYPES: Final[tuple[torch.dtype, ...]] = (
 FP4_DTYPES: Final[tuple[torch.dtype, ...]] = (torch.float4_e2m1fn_x2,)
 
 HIGH_PRECISION_DTYPES: Final[tuple[torch.dtype, ...]] = (*FP32_DTYPES, *FP16_DTYPES)
+REDUCED_PRECISION_DTYPES: Final[tuple[torch.dtype, ...]] = (*FP8_DTYPES, *FP4_DTYPES)
