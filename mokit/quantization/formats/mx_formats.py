@@ -1,0 +1,108 @@
+# SPDX-FileCopyrightText: 2026 CaoSY
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""OCP Microscaling (MX) format definitions."""
+
+from dataclasses import dataclass
+from enum import Enum
+from typing import Final
+
+import torch
+
+from mokit.core import MokitConfigBase
+from mokit.quantization import FP4_DTYPES, FP8_DTYPES
+from mokit.quantization.formats import QuantizationRoundingMode
+
+MX_ELEM_DTYPES: Final[tuple[torch.dtype, ...]] = (*FP8_DTYPES, *FP4_DTYPES, torch.int8)
+MX_SCALE_DTYPE: Final[torch.dtype] = torch.float8_e8m0fnu
+MX_DEFAULT_BLOCK_SIZE: Final[int] = 32
+
+
+class MXScaleCalculationMode(Enum):
+    r"""
+    Methods for calculating MX block scaling.
+
+    Attributes:
+        FLOOR: Recommended by `OCP Microscaling Formats (MX) Specification v1.0
+            <https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf/>`_.
+            Uses :math:`X = 2^{\lfloor \log_2(\max|v|) - \text{max\_exp} \rfloor}`.
+            Overflows for large values and performs poorly for gradient quantization.
+
+        RCEIL: Applies ceil to the ratio of ``max_abs(v)`` and ``Amax(DType)``. See "Computing scaling and conversion
+            factors for FP8 with UE8M0 scales" in the `NVIDIA cuBLAS block quantization documentation
+            <https://docs.nvidia.com/cuda/cublas/index.html#d-block-quantization>`_.
+
+        CEIL: Uses :math:`X = 2^{\lceil \log_2(\max|v|) - \text{max\_exp} \rceil}`.
+            Avoids overflow, but small values may shift to 0 because of the large scaling factor.
+
+        EVEN: Trade-off between FLOOR and CEIL, using
+            :math:`X = 2^{\lfloor \log_2(\operatorname{round}(\max|v|)) - \text{max\_exp} \rfloor}`.
+
+    """
+
+    FLOOR = "floor"
+    RCEIL = "rceil"
+    CEIL = "ceil"
+    EVEN = "even"
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class MXFormat(MokitConfigBase):
+    """
+    An OCP Microscaling (MX) format.
+
+    See the `OCP Microscaling Formats (MX) Specification v1.0
+    <https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf/>`_.
+
+    Attributes:
+        elem_dtype: Data type of the quantized elements. Must be one of ``MX_ELEM_DTYPES``. Defaults to
+            ``torch.float8_e4m3fn``.
+
+        round_mode: Rounding mode used when casting high-precision values to ``elem_dtype``. See
+            ``QuantizationRoundingMode`` for the available modes. Defaults to ``QuantizationRoundingMode.RNE``.
+
+        elem_dtype_max: Largest finite value of ``elem_dtype``, used as the reference maximum when calculating scales.
+            Defaults to ``None``, which derives the value from ``elem_dtype``.
+
+        scale_dtype: Data type of the per-block scale. Fixed at E8M0 by the MX spec. Defaults to ``MX_SCALE_DTYPE``.
+
+        scale_mode: Method used to calculate the per-block scale. See ``MXScaleCalculationMode`` for the available
+            methods. Defaults to ``MXScaleCalculationMode.RCEIL``.
+
+        block_size: Number of elements sharing a single scale. Defaults to ``MX_DEFAULT_BLOCK_SIZE``.
+
+    """
+
+    elem_dtype: Final[torch.dtype] = torch.float8_e4m3fn
+    round_mode: Final[QuantizationRoundingMode] = QuantizationRoundingMode.RNE
+    elem_dtype_max: Final[float | None] = None
+
+    scale_dtype: Final[torch.dtype] = MX_SCALE_DTYPE
+    scale_mode: Final[MXScaleCalculationMode] = MXScaleCalculationMode.RCEIL
+
+    block_size: Final[int] = MX_DEFAULT_BLOCK_SIZE
+
+    def __post_init__(self) -> None:
+        """Validate the field values and derive ``elem_dtype_max`` if unset."""
+        if self.elem_dtype not in MX_ELEM_DTYPES:
+            raise ValueError(f"Supported element dtypes are {MX_ELEM_DTYPES}, got {self.elem_dtype}")
+
+        if not isinstance(self.round_mode, QuantizationRoundingMode):
+            raise ValueError(f"round_mode must be a QuantizationRoundingMode, got {type(self.round_mode)}")
+
+        if self.elem_dtype_max is None:
+            dtype_max = 6.0 if self.elem_dtype is torch.float4_e2m1fn_x2 else torch.finfo(self.elem_dtype).max
+            object.__setattr__(self, "elem_dtype_max", dtype_max)
+        elif self.elem_dtype_max <= 0:
+            raise ValueError(f"elem_dtype_max must be positive, got {self.elem_dtype_max}")
+
+        if self.scale_dtype is not MX_SCALE_DTYPE:
+            raise ValueError(f"The scale dtype is fixed at E8M0 by the MX spec, got {self.scale_dtype}")
+
+        if not isinstance(self.scale_mode, MXScaleCalculationMode):
+            raise ValueError(f"scale_mode must be a MXScaleCalculationMode, got {type(self.scale_mode)}")
+
+        if not isinstance(self.block_size, int) or self.block_size <= 0 or self.block_size % MX_DEFAULT_BLOCK_SIZE != 0:
+            raise ValueError(
+                f"block_size must be a positive multiple of {MX_DEFAULT_BLOCK_SIZE}, got {self.block_size}"
+            )
