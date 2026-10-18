@@ -65,8 +65,9 @@ class MXFormat(MokitConfigBase):
         round_mode: Rounding mode used when casting high-precision values to ``elem_dtype``. See
             ``QuantizationRoundingMode`` for the available modes. Defaults to ``QuantizationRoundingMode.RNE``.
 
-        elem_dtype_max: Largest finite value of ``elem_dtype``, used as the reference maximum when calculating scales.
-            Defaults to ``None``, which derives the value from ``elem_dtype``.
+        elem_dtype_max: the reference dtype maximum when calculating scales. A float for floating dtypes and an
+            int for integer dtypes. Defaults to ``None``, in which case ``elem_dtype_max`` is set to the largest
+            representable value from ``elem_dtype``.
 
         scale_dtype: Data type of the per-block scale. Fixed at E8M0 by the MX spec. Defaults to ``MX_SCALE_DTYPE``.
 
@@ -80,7 +81,7 @@ class MXFormat(MokitConfigBase):
 
     elem_dtype: Final[torch.dtype] = torch.float8_e4m3fn
     round_mode: Final[QuantizationRoundingMode] = QuantizationRoundingMode.RNE
-    elem_dtype_max: Final[float | None] = None
+    elem_dtype_max: Final[float | int | None] = None
 
     scale_dtype: Final[torch.dtype] = MX_SCALE_DTYPE
     scale_mode: Final[MXScaleCalculationMode] = MXScaleCalculationMode.RCEIL
@@ -96,7 +97,12 @@ class MXFormat(MokitConfigBase):
             raise ValueError(f"round_mode must be a QuantizationRoundingMode, got {type(self.round_mode)}")
 
         if self.elem_dtype_max is None:
-            dtype_max = 6.0 if self.elem_dtype is torch.float4_e2m1fn_x2 else torch.finfo(self.elem_dtype).max
+            if self.elem_dtype is torch.float4_e2m1fn_x2:
+                dtype_max = 6.0
+            elif self.elem_dtype.is_floating_point:
+                dtype_max = torch.finfo(self.elem_dtype).max
+            else:
+                dtype_max = torch.iinfo(self.elem_dtype).max
             object.__setattr__(self, "elem_dtype_max", dtype_max)
         elif self.elem_dtype_max <= 0:
             raise ValueError(f"elem_dtype_max must be positive, got {self.elem_dtype_max}")
