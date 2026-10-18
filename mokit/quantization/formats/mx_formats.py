@@ -11,11 +11,12 @@ import torch
 
 from mokit.core import MokitConfigBase
 from mokit.quantization import FP4_DTYPES, FP8_DTYPES
-from mokit.quantization.formats import QuantizationRoundingMode
+from mokit.quantization.formats import PerBlock, QuantizationRoundingMode
 
 MX_ELEM_DTYPES: Final[tuple[torch.dtype, ...]] = (*FP8_DTYPES, *FP4_DTYPES, torch.int8)
 MX_SCALE_DTYPE: Final[torch.dtype] = torch.float8_e8m0fnu
 MX_DEFAULT_BLOCK_SIZE: Final[int] = 32
+MX_DEFAULT_GRANULARITY: Final[PerBlock] = PerBlock(MX_DEFAULT_BLOCK_SIZE)
 
 
 class MXScaleCalculationMode(Enum):
@@ -69,7 +70,8 @@ class MXFormat(MokitConfigBase):
         scale_mode: Method used to calculate the per-block scale. See ``MXScaleCalculationMode`` for the available
             methods. Defaults to ``MXScaleCalculationMode.RCEIL``.
 
-        block_size: Number of elements sharing a single scale. Defaults to ``MX_DEFAULT_BLOCK_SIZE``.
+        granularity: Granularity of the quantization blocks. Must be a ``PerBlock`` whose per-dimension
+            sizes are positive multiples of ``MX_DEFAULT_BLOCK_SIZE``. Defaults to ``MX_DEFAULT_GRANULARITY``.
 
     """
 
@@ -80,7 +82,7 @@ class MXFormat(MokitConfigBase):
     scale_dtype: Final[torch.dtype] = MX_SCALE_DTYPE
     scale_mode: Final[MXScaleCalculationMode] = MXScaleCalculationMode.RCEIL
 
-    block_size: Final[int] = MX_DEFAULT_BLOCK_SIZE
+    granularity: Final[PerBlock] = MX_DEFAULT_GRANULARITY
 
     def __post_init__(self) -> None:
         """Validate the field values and derive ``elem_dtype_max`` if unset."""
@@ -102,7 +104,10 @@ class MXFormat(MokitConfigBase):
         if not isinstance(self.scale_mode, MXScaleCalculationMode):
             raise ValueError(f"scale_mode must be a MXScaleCalculationMode, got {type(self.scale_mode)}")
 
-        if not isinstance(self.block_size, int) or self.block_size <= 0 or self.block_size % MX_DEFAULT_BLOCK_SIZE != 0:
+        if not isinstance(self.granularity, PerBlock):
+            raise ValueError(f"MXFormat.granularity must be of type PerBlock, got {type(self.granularity)}")
+        elif any(size <= 0 or size % MX_DEFAULT_BLOCK_SIZE != 0 for size in self.granularity):
             raise ValueError(
-                f"block_size must be a positive multiple of {MX_DEFAULT_BLOCK_SIZE}, got {self.block_size}"
+                f"Each dim of a quantization block must be a positive multiple of "
+                f"{MX_DEFAULT_BLOCK_SIZE}, got {self.granularity}"
             )
