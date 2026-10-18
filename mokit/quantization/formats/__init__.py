@@ -9,8 +9,10 @@ from enum import Enum
 from typing import Final, overload
 
 from mokit.core import MokitConfigBase
+from mokit.serialization import torch_add_safe_global
 
 
+@torch_add_safe_global
 class QuantizationRoundingMode(Enum):
     """
     Rounding modes for casting high-precision values to reduced-precision values.
@@ -31,6 +33,7 @@ class Granularity(MokitConfigBase):
     """Base class for representing the granularity of quantization."""
 
 
+@torch_add_safe_global
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PerTensor(Granularity):
     """
@@ -40,6 +43,7 @@ class PerTensor(Granularity):
     """
 
 
+@torch_add_safe_global
 @dataclass(frozen=True, slots=True)
 class PerSlice(Granularity):
     """
@@ -60,6 +64,7 @@ class PerSlice(Granularity):
     axis: Final[int]
 
 
+@torch_add_safe_global
 @dataclass(frozen=True, slots=True)
 class PerDim(Granularity):
     """
@@ -80,6 +85,7 @@ class PerDim(Granularity):
     dim: Final[int]
 
 
+@torch_add_safe_global
 @dataclass(frozen=True, slots=True, init=False)
 class PerBlock(Granularity):
     """

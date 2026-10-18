@@ -12,6 +12,7 @@ import torch
 from mokit.core import MokitConfigBase
 from mokit.quantization import FP4_DTYPES, FP8_DTYPES
 from mokit.quantization.formats import PerBlock, QuantizationRoundingMode
+from mokit.serialization import torch_add_safe_global
 
 MX_ELEM_DTYPES: Final[tuple[torch.dtype, ...]] = (*FP8_DTYPES, *FP4_DTYPES, torch.int8)
 MX_SCALE_DTYPE: Final[torch.dtype] = torch.float8_e8m0fnu
@@ -19,6 +20,7 @@ MX_DEFAULT_BLOCK_SIZE: Final[int] = 32
 MX_DEFAULT_GRANULARITY: Final[PerBlock] = PerBlock(MX_DEFAULT_BLOCK_SIZE)
 
 
+@torch_add_safe_global
 class MXScaleCalculationMode(Enum):
     r"""
     Methods for calculating MX block scaling.
@@ -47,6 +49,7 @@ class MXScaleCalculationMode(Enum):
     EVEN = "even"
 
 
+@torch_add_safe_global
 @dataclass(frozen=True, kw_only=True, slots=True)
 class MXFormat(MokitConfigBase):
     """
@@ -113,6 +116,7 @@ class MXFormat(MokitConfigBase):
 BLOCK_MX_DEFAULT_GRANULARITY: Final[PerBlock] = PerBlock(MX_DEFAULT_BLOCK_SIZE, MX_DEFAULT_BLOCK_SIZE)
 
 
+@torch_add_safe_global
 @dataclass(frozen=True, slots=True, kw_only=True)
 class BlockMXFormat(MXFormat):
     """

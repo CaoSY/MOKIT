@@ -11,10 +11,12 @@ import torch
 from mokit.core import MokitConfigBase
 from mokit.quantization import HIGH_PRECISION_DTYPES, REDUCED_PRECISION_DTYPES
 from mokit.quantization.formats import Granularity, PerTensor, QuantizationRoundingMode
+from mokit.serialization import torch_add_safe_global
 
 DEFAULT_GRANULARITY: Final[Granularity] = PerTensor()
 
 
+@torch_add_safe_global
 @dataclass(frozen=True, slots=True, kw_only=True)
 class FloatFormat(MokitConfigBase):
     """
