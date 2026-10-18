@@ -12,3 +12,7 @@ except PackageNotFoundError:
     # The use should not be blocked because MOKIT is not found in the search
     # path. Simply say the version is not known.
     __version__ = "unknown"
+
+from mokit import quantization
+
+__all__ = ["quantization"]
