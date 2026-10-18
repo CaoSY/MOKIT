@@ -3,9 +3,10 @@
 
 """Quantization format definitions."""
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import Enum
-from typing import Final
+from typing import Final, overload
 
 from mokit.core import MokitConfigBase
 
@@ -85,6 +86,8 @@ class PerBlock(Granularity):
     (Multidimensional) per-block quantization granularity.
 
     Calculates different quantization parameters based on tiles given by ``block_size``.
+    Iterates and indexes over ``block_size``, one value per dimension. Slicing returns a new
+    ``PerBlock``.
 
     Examples:
         Below we assume reduction are always performed on trailing dimensions.
@@ -114,6 +117,26 @@ class PerBlock(Granularity):
         if not all(isinstance(x, int) for x in block_size):
             raise TypeError(f"block_size must be ints, e.g. PerBlock(32, 32), got {block_size}")
         object.__setattr__(self, "block_size", block_size)
+
+    def __iter__(self) -> Iterator[int]:
+        """Iterate over the block size of each dimension."""
+        return iter(self.block_size)
+
+    @overload
+    def __getitem__(self, index: int) -> int: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> PerBlock: ...
+
+    def __getitem__(self, index: int | slice) -> int | PerBlock:
+        """Return the block size of a dimension, or a new ``PerBlock`` for a slice."""
+        if isinstance(index, slice):
+            return PerBlock(*self.block_size[index])
+        return self.block_size[index]
+
+    def __len__(self) -> int:
+        """Return the number of dimensions."""
+        return len(self.block_size)
 
 
 from mokit.quantization.formats.mx_formats import (  # noqa: E402
