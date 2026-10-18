@@ -70,8 +70,8 @@ class MXFormat(MokitConfigBase):
         scale_mode: Method used to calculate the per-block scale. See ``MXScaleCalculationMode`` for the available
             methods. Defaults to ``MXScaleCalculationMode.RCEIL``.
 
-        granularity: Granularity of the quantization blocks. Must be a ``PerBlock`` whose per-dimension
-            sizes are positive multiples of ``MX_DEFAULT_BLOCK_SIZE``. Defaults to ``MX_DEFAULT_GRANULARITY``.
+        granularity: Granularity of the quantization blocks. Must be a ``PerBlock`` with positive
+            per-dimension sizes. Defaults to ``MX_DEFAULT_GRANULARITY``.
 
     """
 
@@ -106,11 +106,8 @@ class MXFormat(MokitConfigBase):
 
         if not isinstance(self.granularity, PerBlock):
             raise ValueError(f"MXFormat.granularity must be of type PerBlock, got {type(self.granularity)}")
-        elif any(size <= 0 or size % MX_DEFAULT_BLOCK_SIZE != 0 for size in self.granularity):
-            raise ValueError(
-                f"Each dim of a quantization block must be a positive multiple of "
-                f"{MX_DEFAULT_BLOCK_SIZE}, got {self.granularity}"
-            )
+        elif not self.granularity or any(size <= 0 for size in self.granularity):
+            raise ValueError(f"Each dim of a quantization block must be positive, got {self.granularity}")
 
 
 BLOCK_MX_DEFAULT_GRANULARITY: Final[PerBlock] = PerBlock(MX_DEFAULT_BLOCK_SIZE, MX_DEFAULT_BLOCK_SIZE)
