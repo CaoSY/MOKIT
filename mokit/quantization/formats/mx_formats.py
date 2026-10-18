@@ -138,7 +138,9 @@ class BlockMXFormat(MXFormat):
 
     def __post_init__(self) -> None:
         """Validate the square block constraint on top of the base checks."""
-        super().__post_init__()
+        # Not super(): a zero-arg super here leaves the generated frozen __setattr__ bound to the
+        # pre-clone class, so assignment raises TypeError instead of FrozenInstanceError.
+        MXFormat.__post_init__(self)
 
         if len(self.granularity) != 2 or self.granularity[0] != self.granularity[1]:
             raise ValueError(f"BlockMXFormat only supports a square quantization block, got {self.granularity}")
