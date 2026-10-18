@@ -82,7 +82,7 @@ class MXFormat(MokitConfigBase):
     scale_dtype: Final[torch.dtype] = MX_SCALE_DTYPE
     scale_mode: Final[MXScaleCalculationMode] = MXScaleCalculationMode.RCEIL
 
-    granularity: Final[PerBlock] = MX_DEFAULT_GRANULARITY
+    granularity: PerBlock = MX_DEFAULT_GRANULARITY
 
     def __post_init__(self) -> None:
         """Validate the field values and derive ``elem_dtype_max`` if unset."""
@@ -111,3 +111,27 @@ class MXFormat(MokitConfigBase):
                 f"Each dim of a quantization block must be a positive multiple of "
                 f"{MX_DEFAULT_BLOCK_SIZE}, got {self.granularity}"
             )
+
+
+BLOCK_MX_DEFAULT_GRANULARITY: Final[PerBlock] = PerBlock(MX_DEFAULT_BLOCK_SIZE, MX_DEFAULT_BLOCK_SIZE)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BlockMXFormat(MXFormat):
+    """
+    An MX format restricted to square, two-dimensional quantization blocks.
+
+    Requires ``granularity`` to have exactly two equal dimensions, e.g. ``PerBlock(32, 32)``.
+    Defaults to ``BLOCK_MX_DEFAULT_GRANULARITY``.
+
+    The other attributes are inherited from :class:`MXFormat`, where they are documented.
+    """
+
+    granularity: Final[PerBlock] = BLOCK_MX_DEFAULT_GRANULARITY
+
+    def __post_init__(self) -> None:
+        """Validate the square block constraint on top of the base checks."""
+        super().__post_init__()
+
+        if len(self.granularity) != 2 or self.granularity[0] != self.granularity[1]:
+            raise ValueError(f"BlockMXFormat only supports a square quantization block, got {self.granularity}")

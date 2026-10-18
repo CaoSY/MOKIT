@@ -140,11 +140,13 @@ class PerBlock(Granularity):
 
 
 from mokit.quantization.formats.mx_formats import (  # noqa: E402
+    BlockMXFormat,
     MXFormat,
     MXScaleCalculationMode,
 )
 
 __all__ = [
+    "BlockMXFormat",
     "Granularity",
     "MXFormat",
     "MXScaleCalculationMode",
