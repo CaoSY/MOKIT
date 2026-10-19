@@ -34,6 +34,8 @@ _OPTIONAL_SPECIAL_VALUE_NAMES: Final[tuple[str, ...]] = (
     "negative_zero",
     "positive_infinity",
     "negative_infinity",
+    "positive_nan",
+    "negative_nan",
     "positive_largest_subnormal",
     "positive_smallest_subnormal",
     "negative_largest_subnormal",
@@ -169,10 +171,6 @@ class FloatSpec(MokitConfigBase):
         has_implicit_leading_bit: Whether normal values have an implicit leading one. This can be True
             even when the format has no significand field, as in E8M0.
 
-        exponent_inf_value: Value of the exponent field used by infinity, or ``None`` if the format has
-            no infinity.
-        exponent_nan_value: Value of the exponent field used by NaN, or ``None`` if the format has no NaN.
-
         is_signed: Whether the format has a sign bit.
         has_inf: Whether the format can represent infinities.
         has_nan: Whether the format can represent NaNs.
@@ -182,6 +180,9 @@ class FloatSpec(MokitConfigBase):
 
         positive_infinity: Positive infinity, or ``None`` if the format has no infinity.
         negative_infinity: Negative infinity, or ``None`` if the format has no infinity.
+
+        positive_nan: Positive NaN, or ``None`` if the format has no NaN.
+        negative_nan: Negative NaN, or ``None`` if the format has no NaN.
 
         positive_largest_normal: Positive normal with the largest magnitude.
         positive_smallest_normal: Positive normal with the smallest magnitude.
@@ -232,9 +233,6 @@ class FloatSpec(MokitConfigBase):
     exponent_bias: int
     has_implicit_leading_bit: bool
 
-    exponent_inf_value: int | None
-    exponent_nan_value: int | None
-
     is_signed: bool
     has_inf: bool
     has_nan: bool
@@ -244,6 +242,9 @@ class FloatSpec(MokitConfigBase):
 
     positive_infinity: SpecialFloatValue | None
     negative_infinity: SpecialFloatValue | None
+
+    positive_nan: SpecialFloatValue | None
+    negative_nan: SpecialFloatValue | None
 
     positive_largest_normal: SpecialFloatValue
     positive_smallest_normal: SpecialFloatValue
@@ -299,7 +300,6 @@ class FloatSpec(MokitConfigBase):
             raise ValueError(f"the sign field must be one bit wide, got {self.sign.width}")
 
         self._validate_layout()
-        self._validate_exponent_special_values()
         self._validate_special_values()
 
     def _validate_layout(self) -> None:
@@ -319,22 +319,11 @@ class FloatSpec(MokitConfigBase):
                 f"but bits 0..{expected_end} are unassigned"
             )
 
-    def _validate_exponent_special_values(self) -> None:
-        """Validate the exponent values used by infinities and NaNs."""
-        exponent_max = (1 << self.exponent.width) - 1
-
-        if self.has_inf != (self.exponent_inf_value is not None):
-            raise ValueError("exponent_inf_value must be set exactly when has_inf is True")
-        if self.has_nan != (self.exponent_nan_value is not None):
-            raise ValueError("exponent_nan_value must be set exactly when has_nan is True")
-
-        for name in ("exponent_inf_value", "exponent_nan_value"):
-            value = getattr(self, name)
-            if value is None:
-                continue
-            _validate_int(name, value)
-            if not 0 <= value <= exponent_max:
-                raise ValueError(f"{name} must be in [0, {exponent_max}], got {value}")
+    def _validate_nans(self) -> None:
+        """Validate the NaN values against ``has_nan`` and ``is_signed``."""
+        has_nan_values = self.positive_nan is not None or self.negative_nan is not None
+        if self.has_nan != has_nan_values:
+            raise ValueError("NaN values must be set exactly when has_nan is True")
 
     def _validate_special_values(self) -> None:
         """Validate the presence, encodings, and signs of the special values."""
@@ -364,6 +353,7 @@ class FloatSpec(MokitConfigBase):
             raise ValueError("negative_largest_consecutive_integer is required for a signed format")
 
         self._validate_infinities()
+        self._validate_nans()
         self._validate_subnormals()
 
         for name in _SPECIAL_VALUE_NAMES:
@@ -476,8 +466,6 @@ FLOAT64_SPEC: Final[FloatSpec] = FloatSpec(
     significand=BitField(start=0, end=51),
     exponent_bias=1023,
     has_implicit_leading_bit=True,
-    exponent_inf_value=_FLOAT64_EXPONENT_ALL_ONES,
-    exponent_nan_value=_FLOAT64_EXPONENT_ALL_ONES,
     is_signed=True,
     has_inf=True,
     has_nan=True,
@@ -508,6 +496,20 @@ FLOAT64_SPEC: Final[FloatSpec] = FloatSpec(
         exponent_encoding=format(_FLOAT64_EXPONENT_ALL_ONES, "011b"),
         significand_encoding=format(0, "052b"),
         description="negative infinity",
+    ),
+    positive_nan=SpecialFloatValue(
+        ref_float_value=math.nan,
+        sign_encoding=str(0),
+        exponent_encoding=format(_FLOAT64_EXPONENT_ALL_ONES, "011b"),
+        significand_encoding=format(1 << 51, "052b"),
+        description="positive quiet NaN",
+    ),
+    negative_nan=SpecialFloatValue(
+        ref_float_value=-math.nan,
+        sign_encoding=str(1),
+        exponent_encoding=format(_FLOAT64_EXPONENT_ALL_ONES, "011b"),
+        significand_encoding=format(1 << 51, "052b"),
+        description="negative quiet NaN",
     ),
     positive_largest_normal=SpecialFloatValue(
         ref_float_value=torch.finfo(torch.float64).max,
@@ -675,8 +677,6 @@ FLOAT32_SPEC: Final[FloatSpec] = FloatSpec(
     significand=BitField(start=0, end=22),
     exponent_bias=127,
     has_implicit_leading_bit=True,
-    exponent_inf_value=_FLOAT32_EXPONENT_ALL_ONES,
-    exponent_nan_value=_FLOAT32_EXPONENT_ALL_ONES,
     is_signed=True,
     has_inf=True,
     has_nan=True,
@@ -707,6 +707,20 @@ FLOAT32_SPEC: Final[FloatSpec] = FloatSpec(
         exponent_encoding=format(_FLOAT32_EXPONENT_ALL_ONES, "08b"),
         significand_encoding=format(0, "023b"),
         description="negative infinity",
+    ),
+    positive_nan=SpecialFloatValue(
+        ref_float_value=math.nan,
+        sign_encoding=str(0),
+        exponent_encoding=format(_FLOAT32_EXPONENT_ALL_ONES, "08b"),
+        significand_encoding=format(1 << 22, "023b"),
+        description="positive quiet NaN",
+    ),
+    negative_nan=SpecialFloatValue(
+        ref_float_value=-math.nan,
+        sign_encoding=str(1),
+        exponent_encoding=format(_FLOAT32_EXPONENT_ALL_ONES, "08b"),
+        significand_encoding=format(1 << 22, "023b"),
+        description="negative quiet NaN",
     ),
     positive_largest_normal=SpecialFloatValue(
         ref_float_value=torch.finfo(torch.float32).max,
