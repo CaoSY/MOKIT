@@ -11,6 +11,7 @@ path = [
     "AGENTS.md",
     "CLAUDE.md",
     ".github/workflows/ci.yml",
+    "refs/**",  # Reference material; PDFs here are gitignored and are not distributed.
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 CaoSY"

@@ -222,3 +222,6 @@ __marimo__/
 
 # Editor
 .vscode/
+
+# Reference
+refs/*.pdf
