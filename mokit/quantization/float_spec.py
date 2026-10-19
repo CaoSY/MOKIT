@@ -159,7 +159,6 @@ class FloatSpec(MokitConfigBase):
         is_packed: Whether ``torch_dtype`` packs multiple logical elements into one storage unit, as
             ``torch.float4_e2m1fn_x2`` does.
 
-        logical_bit_width: Number of bits in the logical representation at full precision.
         storage_bit_width: Number of bits occupied by one element in storage.
 
         sign: Layout of the sign field, or ``None`` for an unsigned format.
@@ -215,6 +214,8 @@ class FloatSpec(MokitConfigBase):
             unsigned format.
 
     Properties:
+        logical_bit_width: Total width of the logical bit string.
+
         is_signed: Whether the format has a sign bit.
 
         has_inf: Whether the format can represent infinities.
@@ -226,7 +227,11 @@ class FloatSpec(MokitConfigBase):
     torch_dtype: torch.dtype
     is_packed: bool
 
-    logical_bit_width: int
+    @property
+    def logical_bit_width(self) -> int:
+        """Return the total width of the logical bit string."""
+        return sum(f.width for f in (self.sign, self.exponent, self.significand) if f is not None)
+
     storage_bit_width: int
 
     sign: BitField | None
@@ -287,7 +292,7 @@ class FloatSpec(MokitConfigBase):
 
     def __post_init__(self) -> None:
         """Validate the bit layout, flags, and special values."""
-        for name in ("logical_bit_width", "storage_bit_width", "exponent_bias"):
+        for name in ("storage_bit_width", "exponent_bias"):
             _validate_int(name, getattr(self, name))
         for name in ("is_packed", "has_implicit_leading_bit"):
             if not isinstance(getattr(self, name), bool):
@@ -296,8 +301,6 @@ class FloatSpec(MokitConfigBase):
         if not isinstance(self.torch_dtype, torch.dtype):
             raise TypeError(f"torch_dtype must be a torch.dtype, got {type(self.torch_dtype).__name__}")
 
-        if self.logical_bit_width <= 0:
-            raise ValueError(f"logical_bit_width must be positive, got {self.logical_bit_width}")
         if self.storage_bit_width <= 0:
             raise ValueError(f"storage_bit_width must be positive, got {self.storage_bit_width}")
 
@@ -464,7 +467,6 @@ _FLOAT64_LARGEST_CONSECUTIVE_INTEGER: Final[float] = math.ldexp(1.0, 53)
 FLOAT64_SPEC: Final[FloatSpec] = FloatSpec(
     torch_dtype=torch.float64,
     is_packed=False,
-    logical_bit_width=torch.finfo(torch.float64).bits,
     storage_bit_width=torch.finfo(torch.float64).bits,
     sign=BitField(start=63, end=63),
     exponent=BitField(start=52, end=62),
@@ -672,7 +674,6 @@ _FLOAT32_LARGEST_CONSECUTIVE_INTEGER: Final[float] = math.ldexp(1.0, 24)
 FLOAT32_SPEC: Final[FloatSpec] = FloatSpec(
     torch_dtype=torch.float32,
     is_packed=False,
-    logical_bit_width=torch.finfo(torch.float32).bits,
     storage_bit_width=torch.finfo(torch.float32).bits,
     sign=BitField(start=31, end=31),
     exponent=BitField(start=23, end=30),
