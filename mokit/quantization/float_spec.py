@@ -315,6 +315,13 @@ class FloatSpec(MokitConfigBase):
             raise ValueError(f"the sign field must be one bit wide, got {self.sign.width}")
 
         self._validate_layout()
+
+        if self.storage_bit_width < self.logical_bit_width:
+            raise ValueError(
+                f"storage_bit_width must be at least logical_bit_width, got {self.storage_bit_width} < "
+                f"{self.logical_bit_width}"
+            )
+
         self._validate_special_values()
 
     def _validate_layout(self) -> None:
