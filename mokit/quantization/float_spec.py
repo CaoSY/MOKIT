@@ -171,10 +171,6 @@ class FloatSpec(MokitConfigBase):
         has_implicit_leading_bit: Whether normal values have an implicit leading one. This can be True
             even when the format has no significand field, as in E8M0.
 
-        is_signed: Whether the format has a sign bit.
-        has_inf: Whether the format can represent infinities.
-        has_nan: Whether the format can represent NaNs.
-
         positive_zero: Positive zero, or ``None`` if the format has no zero.
         negative_zero: Negative zero, or ``None`` if the format has no negative zero.
 
@@ -218,6 +214,13 @@ class FloatSpec(MokitConfigBase):
         negative_number_example: A negative value used to exercise the encoding, or ``None`` for an
             unsigned format.
 
+    Properties:
+        is_signed: Whether the format has a sign bit.
+
+        has_inf: Whether the format can represent infinities.
+
+        has_nan: Whether the format can represent NaNs.
+
     """
 
     torch_dtype: torch.dtype
@@ -233,9 +236,20 @@ class FloatSpec(MokitConfigBase):
     exponent_bias: int
     has_implicit_leading_bit: bool
 
-    is_signed: bool
-    has_inf: bool
-    has_nan: bool
+    @property
+    def is_signed(self) -> bool:
+        """Return whether the format has a sign bit."""
+        return self.sign is not None
+
+    @property
+    def has_inf(self) -> bool:
+        """Return whether the format can represent infinities."""
+        return self.positive_infinity is not None or self.negative_infinity is not None
+
+    @property
+    def has_nan(self) -> bool:
+        """Return whether the format can represent NaNs."""
+        return self.positive_nan is not None or self.negative_nan is not None
 
     positive_zero: SpecialFloatValue | None
     negative_zero: SpecialFloatValue | None
@@ -275,7 +289,7 @@ class FloatSpec(MokitConfigBase):
         """Validate the bit layout, flags, and special values."""
         for name in ("logical_bit_width", "storage_bit_width", "exponent_bias"):
             _validate_int(name, getattr(self, name))
-        for name in ("is_packed", "is_signed", "has_inf", "has_nan", "has_implicit_leading_bit"):
+        for name in ("is_packed", "has_implicit_leading_bit"):
             if not isinstance(getattr(self, name), bool):
                 raise TypeError(f"{name} must be a bool, got {type(getattr(self, name)).__name__}")
 
@@ -294,8 +308,6 @@ class FloatSpec(MokitConfigBase):
             if value is not None and not isinstance(value, BitField):
                 raise TypeError(f"{name} must be a BitField or None, got {type(value).__name__}")
 
-        if self.is_signed != (self.sign is not None):
-            raise ValueError("is_signed must be True exactly when sign is not None")
         if self.sign is not None and self.sign.width != 1:
             raise ValueError(f"the sign field must be one bit wide, got {self.sign.width}")
 
@@ -318,12 +330,6 @@ class FloatSpec(MokitConfigBase):
                 f"bit fields must cover exactly {self.logical_bit_width} bits, "
                 f"but bits 0..{expected_end} are unassigned"
             )
-
-    def _validate_nans(self) -> None:
-        """Validate the NaN values against ``has_nan`` and ``is_signed``."""
-        has_nan_values = self.positive_nan is not None or self.negative_nan is not None
-        if self.has_nan != has_nan_values:
-            raise ValueError("NaN values must be set exactly when has_nan is True")
 
     def _validate_special_values(self) -> None:
         """Validate the presence, encodings, and signs of the special values."""
@@ -353,7 +359,6 @@ class FloatSpec(MokitConfigBase):
             raise ValueError("negative_largest_consecutive_integer is required for a signed format")
 
         self._validate_infinities()
-        self._validate_nans()
         self._validate_subnormals()
 
         for name in _SPECIAL_VALUE_NAMES:
@@ -365,11 +370,11 @@ class FloatSpec(MokitConfigBase):
             self._validate_special_value_encoding(name, value)
 
     def _validate_infinities(self) -> None:
-        """Validate the infinity values against ``has_inf`` and ``is_signed``."""
-        if self.has_inf != (self.positive_infinity is not None):
-            raise ValueError("positive_infinity must be set exactly when has_inf is True")
-        if (self.negative_infinity is not None) != (self.has_inf and self.is_signed):
-            raise ValueError("negative_infinity must be set exactly when has_inf is True and the format is signed")
+        """Validate the infinity values against signedness."""
+        if (self.negative_infinity is not None) != (self.positive_infinity is not None and self.is_signed):
+            raise ValueError(
+                "negative_infinity must be set exactly when positive_infinity is set and the format is signed"
+            )
 
     def _validate_subnormals(self) -> None:
         """Validate that subnormal values are present as complete groups."""
@@ -466,9 +471,6 @@ FLOAT64_SPEC: Final[FloatSpec] = FloatSpec(
     significand=BitField(start=0, end=51),
     exponent_bias=1023,
     has_implicit_leading_bit=True,
-    is_signed=True,
-    has_inf=True,
-    has_nan=True,
     positive_zero=SpecialFloatValue(
         ref_float_value=0.0,
         sign_encoding=str(0),
@@ -677,9 +679,6 @@ FLOAT32_SPEC: Final[FloatSpec] = FloatSpec(
     significand=BitField(start=0, end=22),
     exponent_bias=127,
     has_implicit_leading_bit=True,
-    is_signed=True,
-    has_inf=True,
-    has_nan=True,
     positive_zero=SpecialFloatValue(
         ref_float_value=0.0,
         sign_encoding=str(0),
