@@ -25,8 +25,8 @@ jobs:
           python-version: "3.14"
           cache: pip
 
-      # CPU-only: pyrefly needs `import torch` to resolve, and CI has no GPU.
-      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      # CPU-only: pyrefly needs torch and torchvision to resolve, and CI has no GPU.
+      - run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
       - run: pip install --group dev -e .
 
@@ -43,8 +43,8 @@ jobs:
           python-version: "3.14"
           cache: pip
 
-      # CPU-only: GitHub free runners are CPU-only
-      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      # CPU-only: GitHub free runners are CPU-only.
+      - run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
       - run: pip install -e . pytest
 

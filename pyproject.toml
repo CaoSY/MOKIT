@@ -28,10 +28,10 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
-# PyPI name is `torch`, not `pytorch`. Linux wheels are already CUDA builds;
-# `--index-url https://download.pytorch.org/whl/cpu` for CPU-only.
+# use `--index-url https://download.pytorch.org/whl/cpu` for CPU-only.
 dependencies = [
-    "torch>=2.14",
+    "torch>=2.14.1",
+    "torchvision>=0.29.1",
 ]
 
 [dependency-groups]
