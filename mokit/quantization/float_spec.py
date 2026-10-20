@@ -159,7 +159,7 @@ class FloatSpec(MokitConfigBase):
         is_packed: Whether ``torch_dtype`` packs multiple logical elements into one storage unit, as
             ``torch.float4_e2m1fn_x2`` does.
 
-        storage_bit_width: Number of bits occupied by one element in storage.
+        register_bit_width: Number of bits occupied by one element in the register.
 
         sign: Layout of the sign field, or ``None`` for an unsigned format.
         exponent: Layout of the exponent field.
@@ -234,7 +234,7 @@ class FloatSpec(MokitConfigBase):
         """Return the total width of the logical bit string."""
         return sum(f.width for f in (self.sign, self.exponent, self.significand) if f is not None)
 
-    storage_bit_width: int
+    register_bit_width: int
 
     sign: BitField | None
     exponent: BitField
@@ -296,7 +296,7 @@ class FloatSpec(MokitConfigBase):
 
     def __post_init__(self) -> None:
         """Validate the bit layout, flags, and special values."""
-        for name in ("storage_bit_width", "exponent_bias"):
+        for name in ("register_bit_width", "exponent_bias"):
             _validate_int(name, getattr(self, name))
         for name in ("is_packed", "has_implicit_leading_bit"):
             if not isinstance(getattr(self, name), bool):
@@ -305,8 +305,8 @@ class FloatSpec(MokitConfigBase):
         if not isinstance(self.torch_dtype, torch.dtype):
             raise TypeError(f"torch_dtype must be a torch.dtype, got {type(self.torch_dtype).__name__}")
 
-        if self.storage_bit_width <= 0:
-            raise ValueError(f"storage_bit_width must be positive, got {self.storage_bit_width}")
+        if self.register_bit_width <= 0:
+            raise ValueError(f"register_bit_width must be positive, got {self.register_bit_width}")
 
         if not isinstance(self.eps, float):
             raise TypeError(f"eps must be a float, got {type(self.eps).__name__}")
@@ -325,9 +325,9 @@ class FloatSpec(MokitConfigBase):
 
         self._validate_layout()
 
-        if self.storage_bit_width < self.logical_bit_width:
+        if self.register_bit_width < self.logical_bit_width:
             raise ValueError(
-                f"storage_bit_width must be at least logical_bit_width, got {self.storage_bit_width} < "
+                f"register_bit_width must be at least logical_bit_width, got {self.register_bit_width} < "
                 f"{self.logical_bit_width}"
             )
 
@@ -483,7 +483,7 @@ _FLOAT64_LARGEST_CONSECUTIVE_INTEGER: Final[float] = math.ldexp(1.0, 53)
 FLOAT64_SPEC: Final[FloatSpec] = FloatSpec(
     torch_dtype=torch.float64,
     is_packed=False,
-    storage_bit_width=torch.finfo(torch.float64).bits,
+    register_bit_width=torch.finfo(torch.float64).bits,
     sign=BitField(start=63, end=63),
     exponent=BitField(start=52, end=62),
     significand=BitField(start=0, end=51),
@@ -691,7 +691,7 @@ _FLOAT32_LARGEST_CONSECUTIVE_INTEGER: Final[float] = math.ldexp(1.0, 24)
 FLOAT32_SPEC: Final[FloatSpec] = FloatSpec(
     torch_dtype=torch.float32,
     is_packed=False,
-    storage_bit_width=torch.finfo(torch.float32).bits,
+    register_bit_width=torch.finfo(torch.float32).bits,
     sign=BitField(start=31, end=31),
     exponent=BitField(start=23, end=30),
     significand=BitField(start=0, end=22),
@@ -899,7 +899,7 @@ _FLOAT16_LARGEST_CONSECUTIVE_INTEGER: Final[float] = math.ldexp(1.0, 11)
 FLOAT16_SPEC: Final[FloatSpec] = FloatSpec(
     torch_dtype=torch.float16,
     is_packed=False,
-    storage_bit_width=torch.finfo(torch.float16).bits,
+    register_bit_width=torch.finfo(torch.float16).bits,
     sign=BitField(start=15, end=15),
     exponent=BitField(start=10, end=14),
     significand=BitField(start=0, end=9),
@@ -1126,7 +1126,7 @@ _BFLOAT16_LARGEST_CONSECUTIVE_INTEGER: Final[float] = math.ldexp(1.0, 8)
 BFLOAT16_SPEC: Final[FloatSpec] = FloatSpec(
     torch_dtype=torch.bfloat16,
     is_packed=False,
-    storage_bit_width=torch.finfo(torch.bfloat16).bits,
+    register_bit_width=torch.finfo(torch.bfloat16).bits,
     sign=BitField(start=15, end=15),
     exponent=BitField(start=7, end=14),
     significand=BitField(start=0, end=6),
@@ -1333,7 +1333,7 @@ _FLOAT8_E4M3FN_LARGEST_CONSECUTIVE_INTEGER: Final[float] = math.ldexp(1.0, 4)
 FLOAT8_E4M3FN_SPEC: Final[FloatSpec] = FloatSpec(
     torch_dtype=torch.float8_e4m3fn,
     is_packed=False,
-    storage_bit_width=torch.finfo(torch.float8_e4m3fn).bits,
+    register_bit_width=torch.finfo(torch.float8_e4m3fn).bits,
     sign=BitField(start=7, end=7),
     exponent=BitField(start=3, end=6),
     significand=BitField(start=0, end=2),
@@ -1528,7 +1528,7 @@ _FLOAT8_E4M3FNUZ_LARGEST_CONSECUTIVE_INTEGER: Final[float] = math.ldexp(1.0, 4)
 FLOAT8_E4M3FNUZ_SPEC: Final[FloatSpec] = FloatSpec(
     torch_dtype=torch.float8_e4m3fnuz,
     is_packed=False,
-    storage_bit_width=torch.finfo(torch.float8_e4m3fnuz).bits,
+    register_bit_width=torch.finfo(torch.float8_e4m3fnuz).bits,
     sign=BitField(start=7, end=7),
     exponent=BitField(start=3, end=6),
     significand=BitField(start=0, end=2),
@@ -1711,7 +1711,7 @@ _FLOAT8_E5M2_LARGEST_CONSECUTIVE_INTEGER: Final[float] = math.ldexp(1.0, 3)
 FLOAT8_E5M2_SPEC: Final[FloatSpec] = FloatSpec(
     torch_dtype=torch.float8_e5m2,
     is_packed=False,
-    storage_bit_width=torch.finfo(torch.float8_e5m2).bits,
+    register_bit_width=torch.finfo(torch.float8_e5m2).bits,
     sign=BitField(start=7, end=7),
     exponent=BitField(start=2, end=6),
     significand=BitField(start=0, end=1),
@@ -1924,7 +1924,7 @@ _FLOAT8_E5M2FNUZ_LARGEST_CONSECUTIVE_INTEGER: Final[float] = math.ldexp(1.0, 3)
 FLOAT8_E5M2FNUZ_SPEC: Final[FloatSpec] = FloatSpec(
     torch_dtype=torch.float8_e5m2fnuz,
     is_packed=False,
-    storage_bit_width=torch.finfo(torch.float8_e5m2fnuz).bits,
+    register_bit_width=torch.finfo(torch.float8_e5m2fnuz).bits,
     sign=BitField(start=7, end=7),
     exponent=BitField(start=2, end=6),
     significand=BitField(start=0, end=1),
@@ -2104,7 +2104,7 @@ _FLOAT8_E8M0FNU_LARGEST_POWER_OF_TWO: Final[float] = math.ldexp(1.0, 127)
 FLOAT8_E8M0FNU_SPEC: Final[FloatSpec] = FloatSpec(
     torch_dtype=torch.float8_e8m0fnu,
     is_packed=False,
-    storage_bit_width=torch.finfo(torch.float8_e8m0fnu).bits,
+    register_bit_width=torch.finfo(torch.float8_e8m0fnu).bits,
     sign=None,
     exponent=BitField(start=0, end=7),
     significand=None,
@@ -2199,7 +2199,7 @@ _FLOAT6_E2M3_LARGEST_CONSECUTIVE_INTEGER: Final[float] = 7.0
 FLOAT6_E2M3_SPEC: Final[FloatSpec] = FloatSpec(
     torch_dtype=torch.uint8,
     is_packed=False,
-    storage_bit_width=torch.iinfo(torch.uint8).bits,
+    register_bit_width=torch.iinfo(torch.uint8).bits,
     sign=BitField(start=5, end=5),
     exponent=BitField(start=3, end=4),
     significand=BitField(start=0, end=2),
@@ -2383,7 +2383,7 @@ _FLOAT6_E3M2_LARGEST_CONSECUTIVE_INTEGER: Final[float] = 8.0
 FLOAT6_E3M2_SPEC: Final[FloatSpec] = FloatSpec(
     torch_dtype=torch.uint8,
     is_packed=False,
-    storage_bit_width=torch.iinfo(torch.uint8).bits,
+    register_bit_width=torch.iinfo(torch.uint8).bits,
     sign=BitField(start=5, end=5),
     exponent=BitField(start=2, end=4),
     significand=BitField(start=0, end=1),
@@ -2552,7 +2552,7 @@ FLOAT6_E3M2_SPEC: Final[FloatSpec] = FloatSpec(
 
 
 # FLOAT4_E2M1: 1/2/1, bias 1; max finite 6; no Inf/NaN.
-# torch.float4_e2m1fn_x2 packs two 4-bit elements per byte; storage_bit_width is per element.
+# torch.float4_e2m1fn_x2 packs two 4-bit elements per byte; register_bit_width is per element.
 # OCP Microscaling Formats (MX) Specification v1.0:
 # https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
 # ml_dtypes:
@@ -2571,7 +2571,7 @@ _FLOAT4_E2M1FN_LARGEST_CONSECUTIVE_INTEGER: Final[float] = 4.0
 FLOAT4_E2M1FN_SPEC: Final[FloatSpec] = FloatSpec(
     torch_dtype=torch.float4_e2m1fn_x2,
     is_packed=True,
-    storage_bit_width=4,
+    register_bit_width=4,
     sign=BitField(start=3, end=3),
     exponent=BitField(start=1, end=2),
     significand=BitField(start=0, end=0),
