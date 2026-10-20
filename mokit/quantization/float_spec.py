@@ -1303,3 +1303,768 @@ BFLOAT16_SPEC: Final[FloatSpec] = FloatSpec(
         description="negative example",
     ),
 )
+
+# FLOAT8_E4M3FN: no infinity; NaN encodings 0x7F and 0xFF; max finite 448.
+# OCP 8-bit Floating Point Specification (OFP8), Rev. 1.1:
+# https://www.opencompute.org/documents/ocp-8-bit-floating-point-specification-ofp8-revision-1-1-final-pdf
+# FP8 formats paper (Micikevicius et al.):
+# https://arxiv.org/pdf/2209.05433
+# FLOAT8_E4M3FN encoding constants.
+_FLOAT8_E4M3FN_SIGNIFICAND_ALL_ONES: Final[int] = (1 << 3) - 1
+_FLOAT8_E4M3FN_SMALLEST_SUBNORMAL: Final[float] = math.ldexp(1.0, -9)
+_FLOAT8_E4M3FN_LARGEST_SUBNORMAL: Final[float] = math.ldexp(_FLOAT8_E4M3FN_SIGNIFICAND_ALL_ONES, -9)
+_FLOAT8_E4M3FN_LARGEST_POWER_OF_TWO: Final[float] = math.ldexp(1.0, 8)
+_FLOAT8_E4M3FN_LARGEST_CONSECUTIVE_INTEGER: Final[float] = math.ldexp(1.0, 4)
+
+
+FLOAT8_E4M3FN_SPEC: Final[FloatSpec] = FloatSpec(
+    torch_dtype=torch.float8_e4m3fn,
+    is_packed=False,
+    storage_bit_width=torch.finfo(torch.float8_e4m3fn).bits,
+    sign=BitField(start=7, end=7),
+    exponent=BitField(start=3, end=6),
+    significand=BitField(start=0, end=2),
+    exponent_bias=7,
+    has_implicit_leading_bit=True,
+    positive_zero=SpecialFloatValue(
+        ref_float_value=0.0,
+        sign_encoding=str(0),
+        exponent_encoding=format(0, "04b"),
+        significand_encoding=format(0, "03b"),
+        description="positive zero",
+    ),
+    negative_zero=SpecialFloatValue(
+        ref_float_value=-0.0,
+        sign_encoding=str(1),
+        exponent_encoding=format(0, "04b"),
+        significand_encoding=format(0, "03b"),
+        description="negative zero",
+    ),
+    positive_infinity=None,
+    negative_infinity=None,
+    positive_nan=SpecialFloatValue(
+        ref_float_value=math.nan,
+        sign_encoding=str(0),
+        exponent_encoding=format(15, "04b"),
+        significand_encoding=format(7, "03b"),
+        description="positive quiet NaN",
+    ),
+    negative_nan=SpecialFloatValue(
+        ref_float_value=-math.nan,
+        sign_encoding=str(1),
+        exponent_encoding=format(15, "04b"),
+        significand_encoding=format(7, "03b"),
+        description="negative quiet NaN",
+    ),
+    positive_largest_normal=SpecialFloatValue(
+        ref_float_value=torch.finfo(torch.float8_e4m3fn).max,
+        sign_encoding=str(0),
+        exponent_encoding=format(15, "04b"),
+        significand_encoding=format(6, "03b"),
+        description="largest positive normal",
+    ),
+    positive_smallest_normal=SpecialFloatValue(
+        ref_float_value=torch.finfo(torch.float8_e4m3fn).tiny,
+        sign_encoding=str(0),
+        exponent_encoding=format(1, "04b"),
+        significand_encoding=format(0, "03b"),
+        description="smallest positive normal",
+    ),
+    negative_largest_normal=SpecialFloatValue(
+        ref_float_value=torch.finfo(torch.float8_e4m3fn).min,
+        sign_encoding=str(1),
+        exponent_encoding=format(15, "04b"),
+        significand_encoding=format(6, "03b"),
+        description="most negative normal",
+    ),
+    negative_smallest_normal=SpecialFloatValue(
+        ref_float_value=-torch.finfo(torch.float8_e4m3fn).tiny,
+        sign_encoding=str(1),
+        exponent_encoding=format(1, "04b"),
+        significand_encoding=format(0, "03b"),
+        description="negative normal closest to zero",
+    ),
+    positive_largest_subnormal=SpecialFloatValue(
+        ref_float_value=_FLOAT8_E4M3FN_LARGEST_SUBNORMAL,
+        sign_encoding=str(0),
+        exponent_encoding=format(0, "04b"),
+        significand_encoding=format(7, "03b"),
+        description="largest positive subnormal",
+    ),
+    positive_smallest_subnormal=SpecialFloatValue(
+        ref_float_value=_FLOAT8_E4M3FN_SMALLEST_SUBNORMAL,
+        sign_encoding=str(0),
+        exponent_encoding=format(0, "04b"),
+        significand_encoding=format(1, "03b"),
+        description="smallest positive subnormal",
+    ),
+    negative_largest_subnormal=SpecialFloatValue(
+        ref_float_value=-_FLOAT8_E4M3FN_LARGEST_SUBNORMAL,
+        sign_encoding=str(1),
+        exponent_encoding=format(0, "04b"),
+        significand_encoding=format(7, "03b"),
+        description="most negative subnormal",
+    ),
+    negative_smallest_subnormal=SpecialFloatValue(
+        ref_float_value=-_FLOAT8_E4M3FN_SMALLEST_SUBNORMAL,
+        sign_encoding=str(1),
+        exponent_encoding=format(0, "04b"),
+        significand_encoding=format(1, "03b"),
+        description="negative subnormal closest to zero",
+    ),
+    positive_largest_power_of_two=SpecialFloatValue(
+        ref_float_value=_FLOAT8_E4M3FN_LARGEST_POWER_OF_TWO,
+        sign_encoding=str(0),
+        exponent_encoding=format(15, "04b"),
+        significand_encoding=format(0, "03b"),
+        description="largest positive power of two",
+    ),
+    positive_smallest_normal_power_of_two=SpecialFloatValue(
+        ref_float_value=torch.finfo(torch.float8_e4m3fn).tiny,
+        sign_encoding=str(0),
+        exponent_encoding=format(1, "04b"),
+        significand_encoding=format(0, "03b"),
+        description="smallest positive normal power of two",
+    ),
+    positive_smallest_subnormal_power_of_two=SpecialFloatValue(
+        ref_float_value=_FLOAT8_E4M3FN_SMALLEST_SUBNORMAL,
+        sign_encoding=str(0),
+        exponent_encoding=format(0, "04b"),
+        significand_encoding=format(1, "03b"),
+        description="smallest positive subnormal power of two",
+    ),
+    negative_largest_power_of_two=SpecialFloatValue(
+        ref_float_value=-_FLOAT8_E4M3FN_LARGEST_POWER_OF_TWO,
+        sign_encoding=str(1),
+        exponent_encoding=format(15, "04b"),
+        significand_encoding=format(0, "03b"),
+        description="negative power of two with largest magnitude",
+    ),
+    negative_smallest_normal_power_of_two=SpecialFloatValue(
+        ref_float_value=-torch.finfo(torch.float8_e4m3fn).tiny,
+        sign_encoding=str(1),
+        exponent_encoding=format(1, "04b"),
+        significand_encoding=format(0, "03b"),
+        description="negative normal power of two with smallest magnitude",
+    ),
+    negative_smallest_subnormal_power_of_two=SpecialFloatValue(
+        ref_float_value=-_FLOAT8_E4M3FN_SMALLEST_SUBNORMAL,
+        sign_encoding=str(1),
+        exponent_encoding=format(0, "04b"),
+        significand_encoding=format(1, "03b"),
+        description="negative subnormal power of two with smallest magnitude",
+    ),
+    positive_largest_integer=SpecialFloatValue(
+        ref_float_value=torch.finfo(torch.float8_e4m3fn).max,
+        sign_encoding=str(0),
+        exponent_encoding=format(15, "04b"),
+        significand_encoding=format(6, "03b"),
+        description="largest positive integer-valued float",
+    ),
+    negative_largest_integer=SpecialFloatValue(
+        ref_float_value=torch.finfo(torch.float8_e4m3fn).min,
+        sign_encoding=str(1),
+        exponent_encoding=format(15, "04b"),
+        significand_encoding=format(6, "03b"),
+        description="most negative integer-valued float",
+    ),
+    positive_largest_consecutive_integer=SpecialFloatValue(
+        ref_float_value=_FLOAT8_E4M3FN_LARGEST_CONSECUTIVE_INTEGER,
+        sign_encoding=str(0),
+        exponent_encoding=format(11, "04b"),
+        significand_encoding=format(0, "03b"),
+        description="largest positive consecutive integer",
+    ),
+    negative_largest_consecutive_integer=SpecialFloatValue(
+        ref_float_value=-_FLOAT8_E4M3FN_LARGEST_CONSECUTIVE_INTEGER,
+        sign_encoding=str(1),
+        exponent_encoding=format(11, "04b"),
+        significand_encoding=format(0, "03b"),
+        description="most negative consecutive integer",
+    ),
+    positive_number_example=SpecialFloatValue(
+        ref_float_value=40.0,
+        sign_encoding=str(0),
+        exponent_encoding=format(12, "04b"),
+        significand_encoding=format(2, "03b"),
+        description="positive example",
+    ),
+    negative_number_example=SpecialFloatValue(
+        ref_float_value=-32.0,
+        sign_encoding=str(1),
+        exponent_encoding=format(12, "04b"),
+        significand_encoding=format(0, "03b"),
+        description="negative example",
+    ),
+)
+
+# FLOAT8_E4M3FNUZ: no infinity; only NaN 0x80; no negative zero; max finite 240.
+# FNUZ variants (Graphcore/AMD/Qualcomm):
+# https://github.com/openxla/stablehlo/blob/main/rfcs/20230321-fp8_fnuz.md
+# ml_dtypes format description:
+# https://github.com/jax-ml/ml_dtypes/blob/main/README.md#float8_e4m3fnuz
+# FLOAT8_E4M3FNUZ encoding constants.
+_FLOAT8_E4M3FNUZ_SIGNIFICAND_ALL_ONES: Final[int] = (1 << 3) - 1
+_FLOAT8_E4M3FNUZ_SMALLEST_SUBNORMAL: Final[float] = math.ldexp(1.0, -10)
+_FLOAT8_E4M3FNUZ_LARGEST_SUBNORMAL: Final[float] = math.ldexp(_FLOAT8_E4M3FNUZ_SIGNIFICAND_ALL_ONES, -10)
+_FLOAT8_E4M3FNUZ_LARGEST_POWER_OF_TWO: Final[float] = math.ldexp(1.0, 7)
+_FLOAT8_E4M3FNUZ_LARGEST_CONSECUTIVE_INTEGER: Final[float] = math.ldexp(1.0, 4)
+
+
+FLOAT8_E4M3FNUZ_SPEC: Final[FloatSpec] = FloatSpec(
+    torch_dtype=torch.float8_e4m3fnuz,
+    is_packed=False,
+    storage_bit_width=torch.finfo(torch.float8_e4m3fnuz).bits,
+    sign=BitField(start=7, end=7),
+    exponent=BitField(start=3, end=6),
+    significand=BitField(start=0, end=2),
+    exponent_bias=8,
+    has_implicit_leading_bit=True,
+    positive_zero=SpecialFloatValue(
+        ref_float_value=0.0,
+        sign_encoding=str(0),
+        exponent_encoding=format(0, "04b"),
+        significand_encoding=format(0, "03b"),
+        description="positive zero",
+    ),
+    negative_zero=None,
+    positive_infinity=None,
+    negative_infinity=None,
+    positive_nan=None,
+    negative_nan=SpecialFloatValue(
+        ref_float_value=-math.nan,
+        sign_encoding=str(1),
+        exponent_encoding=format(0, "04b"),
+        significand_encoding=format(0, "03b"),
+        description="negative quiet NaN",
+    ),
+    positive_largest_normal=SpecialFloatValue(
+        ref_float_value=torch.finfo(torch.float8_e4m3fnuz).max,
+        sign_encoding=str(0),
+        exponent_encoding=format(15, "04b"),
+        significand_encoding=format(7, "03b"),
+        description="largest positive normal",
+    ),
+    positive_smallest_normal=SpecialFloatValue(
+        ref_float_value=torch.finfo(torch.float8_e4m3fnuz).tiny,
+        sign_encoding=str(0),
+        exponent_encoding=format(1, "04b"),
+        significand_encoding=format(0, "03b"),
+        description="smallest positive normal",
+    ),
+    negative_largest_normal=SpecialFloatValue(
+        ref_float_value=torch.finfo(torch.float8_e4m3fnuz).min,
+        sign_encoding=str(1),
+        exponent_encoding=format(15, "04b"),
+        significand_encoding=format(7, "03b"),
+        description="most negative normal",
+    ),
+    negative_smallest_normal=SpecialFloatValue(
+        ref_float_value=-torch.finfo(torch.float8_e4m3fnuz).tiny,
+        sign_encoding=str(1),
+        exponent_encoding=format(1, "04b"),
+        significand_encoding=format(0, "03b"),
+        description="negative normal closest to zero",
+    ),
+    positive_largest_subnormal=SpecialFloatValue(
+        ref_float_value=_FLOAT8_E4M3FNUZ_LARGEST_SUBNORMAL,
+        sign_encoding=str(0),
+        exponent_encoding=format(0, "04b"),
+        significand_encoding=format(7, "03b"),
+        description="largest positive subnormal",
+    ),
+    positive_smallest_subnormal=SpecialFloatValue(
+        ref_float_value=_FLOAT8_E4M3FNUZ_SMALLEST_SUBNORMAL,
+        sign_encoding=str(0),
+        exponent_encoding=format(0, "04b"),
+        significand_encoding=format(1, "03b"),
+        description="smallest positive subnormal",
+    ),
+    negative_largest_subnormal=SpecialFloatValue(
+        ref_float_value=-_FLOAT8_E4M3FNUZ_LARGEST_SUBNORMAL,
+        sign_encoding=str(1),
+        exponent_encoding=format(0, "04b"),
+        significand_encoding=format(7, "03b"),
+        description="most negative subnormal",
+    ),
+    negative_smallest_subnormal=SpecialFloatValue(
+        ref_float_value=-_FLOAT8_E4M3FNUZ_SMALLEST_SUBNORMAL,
+        sign_encoding=str(1),
+        exponent_encoding=format(0, "04b"),
+        significand_encoding=format(1, "03b"),
+        description="negative subnormal closest to zero",
+    ),
+    positive_largest_power_of_two=SpecialFloatValue(
+        ref_float_value=_FLOAT8_E4M3FNUZ_LARGEST_POWER_OF_TWO,
+        sign_encoding=str(0),
+        exponent_encoding=format(15, "04b"),
+        significand_encoding=format(0, "03b"),
+        description="largest positive power of two",
+    ),
+    positive_smallest_normal_power_of_two=SpecialFloatValue(
+        ref_float_value=torch.finfo(torch.float8_e4m3fnuz).tiny,
+        sign_encoding=str(0),
+        exponent_encoding=format(1, "04b"),
+        significand_encoding=format(0, "03b"),
+        description="smallest positive normal power of two",
+    ),
+    positive_smallest_subnormal_power_of_two=SpecialFloatValue(
+        ref_float_value=_FLOAT8_E4M3FNUZ_SMALLEST_SUBNORMAL,
+        sign_encoding=str(0),
+        exponent_encoding=format(0, "04b"),
+        significand_encoding=format(1, "03b"),
+        description="smallest positive subnormal power of two",
+    ),
+    negative_largest_power_of_two=SpecialFloatValue(
+        ref_float_value=-_FLOAT8_E4M3FNUZ_LARGEST_POWER_OF_TWO,
+        sign_encoding=str(1),
+        exponent_encoding=format(15, "04b"),
+        significand_encoding=format(0, "03b"),
+        description="negative power of two with largest magnitude",
+    ),
+    negative_smallest_normal_power_of_two=SpecialFloatValue(
+        ref_float_value=-torch.finfo(torch.float8_e4m3fnuz).tiny,
+        sign_encoding=str(1),
+        exponent_encoding=format(1, "04b"),
+        significand_encoding=format(0, "03b"),
+        description="negative normal power of two with smallest magnitude",
+    ),
+    negative_smallest_subnormal_power_of_two=SpecialFloatValue(
+        ref_float_value=-_FLOAT8_E4M3FNUZ_SMALLEST_SUBNORMAL,
+        sign_encoding=str(1),
+        exponent_encoding=format(0, "04b"),
+        significand_encoding=format(1, "03b"),
+        description="negative subnormal power of two with smallest magnitude",
+    ),
+    positive_largest_integer=SpecialFloatValue(
+        ref_float_value=torch.finfo(torch.float8_e4m3fnuz).max,
+        sign_encoding=str(0),
+        exponent_encoding=format(15, "04b"),
+        significand_encoding=format(7, "03b"),
+        description="largest positive integer-valued float",
+    ),
+    negative_largest_integer=SpecialFloatValue(
+        ref_float_value=torch.finfo(torch.float8_e4m3fnuz).min,
+        sign_encoding=str(1),
+        exponent_encoding=format(15, "04b"),
+        significand_encoding=format(7, "03b"),
+        description="most negative integer-valued float",
+    ),
+    positive_largest_consecutive_integer=SpecialFloatValue(
+        ref_float_value=_FLOAT8_E4M3FNUZ_LARGEST_CONSECUTIVE_INTEGER,
+        sign_encoding=str(0),
+        exponent_encoding=format(12, "04b"),
+        significand_encoding=format(0, "03b"),
+        description="largest positive consecutive integer",
+    ),
+    negative_largest_consecutive_integer=SpecialFloatValue(
+        ref_float_value=-_FLOAT8_E4M3FNUZ_LARGEST_CONSECUTIVE_INTEGER,
+        sign_encoding=str(1),
+        exponent_encoding=format(12, "04b"),
+        significand_encoding=format(0, "03b"),
+        description="most negative consecutive integer",
+    ),
+    positive_number_example=SpecialFloatValue(
+        ref_float_value=40.0,
+        sign_encoding=str(0),
+        exponent_encoding=format(13, "04b"),
+        significand_encoding=format(2, "03b"),
+        description="positive example",
+    ),
+    negative_number_example=SpecialFloatValue(
+        ref_float_value=-32.0,
+        sign_encoding=str(1),
+        exponent_encoding=format(13, "04b"),
+        significand_encoding=format(0, "03b"),
+        description="negative example",
+    ),
+)
+
+# FLOAT8_E5M2: IEEE-like infinity and NaNs; max finite 57344.
+# OCP 8-bit Floating Point Specification (OFP8), Rev. 1.1:
+# https://www.opencompute.org/documents/ocp-8-bit-floating-point-specification-ofp8-revision-1-1-final-pdf
+# FP8 formats paper (Micikevicius et al.):
+# https://arxiv.org/pdf/2209.05433
+# FLOAT8_E5M2 encoding constants.
+_FLOAT8_E5M2_SIGNIFICAND_ALL_ONES: Final[int] = (1 << 2) - 1
+_FLOAT8_E5M2_SMALLEST_SUBNORMAL: Final[float] = math.ldexp(1.0, -16)
+_FLOAT8_E5M2_LARGEST_SUBNORMAL: Final[float] = math.ldexp(_FLOAT8_E5M2_SIGNIFICAND_ALL_ONES, -16)
+_FLOAT8_E5M2_LARGEST_POWER_OF_TWO: Final[float] = math.ldexp(1.0, 15)
+_FLOAT8_E5M2_LARGEST_CONSECUTIVE_INTEGER: Final[float] = math.ldexp(1.0, 3)
+
+
+FLOAT8_E5M2_SPEC: Final[FloatSpec] = FloatSpec(
+    torch_dtype=torch.float8_e5m2,
+    is_packed=False,
+    storage_bit_width=torch.finfo(torch.float8_e5m2).bits,
+    sign=BitField(start=7, end=7),
+    exponent=BitField(start=2, end=6),
+    significand=BitField(start=0, end=1),
+    exponent_bias=15,
+    has_implicit_leading_bit=True,
+    positive_zero=SpecialFloatValue(
+        ref_float_value=0.0,
+        sign_encoding=str(0),
+        exponent_encoding=format(0, "05b"),
+        significand_encoding=format(0, "02b"),
+        description="positive zero",
+    ),
+    negative_zero=SpecialFloatValue(
+        ref_float_value=-0.0,
+        sign_encoding=str(1),
+        exponent_encoding=format(0, "05b"),
+        significand_encoding=format(0, "02b"),
+        description="negative zero",
+    ),
+    positive_infinity=SpecialFloatValue(
+        ref_float_value=math.inf,
+        sign_encoding=str(0),
+        exponent_encoding=format(31, "05b"),
+        significand_encoding=format(0, "02b"),
+        description="positive infinity",
+    ),
+    negative_infinity=SpecialFloatValue(
+        ref_float_value=-math.inf,
+        sign_encoding=str(1),
+        exponent_encoding=format(31, "05b"),
+        significand_encoding=format(0, "02b"),
+        description="negative infinity",
+    ),
+    positive_nan=SpecialFloatValue(
+        ref_float_value=math.nan,
+        sign_encoding=str(0),
+        exponent_encoding=format(31, "05b"),
+        significand_encoding=format(3, "02b"),
+        description="positive quiet NaN",
+    ),
+    negative_nan=SpecialFloatValue(
+        ref_float_value=-math.nan,
+        sign_encoding=str(1),
+        exponent_encoding=format(31, "05b"),
+        significand_encoding=format(3, "02b"),
+        description="negative quiet NaN",
+    ),
+    positive_largest_normal=SpecialFloatValue(
+        ref_float_value=torch.finfo(torch.float8_e5m2).max,
+        sign_encoding=str(0),
+        exponent_encoding=format(30, "05b"),
+        significand_encoding=format(3, "02b"),
+        description="largest positive normal",
+    ),
+    positive_smallest_normal=SpecialFloatValue(
+        ref_float_value=torch.finfo(torch.float8_e5m2).tiny,
+        sign_encoding=str(0),
+        exponent_encoding=format(1, "05b"),
+        significand_encoding=format(0, "02b"),
+        description="smallest positive normal",
+    ),
+    negative_largest_normal=SpecialFloatValue(
+        ref_float_value=torch.finfo(torch.float8_e5m2).min,
+        sign_encoding=str(1),
+        exponent_encoding=format(30, "05b"),
+        significand_encoding=format(3, "02b"),
+        description="most negative normal",
+    ),
+    negative_smallest_normal=SpecialFloatValue(
+        ref_float_value=-torch.finfo(torch.float8_e5m2).tiny,
+        sign_encoding=str(1),
+        exponent_encoding=format(1, "05b"),
+        significand_encoding=format(0, "02b"),
+        description="negative normal closest to zero",
+    ),
+    positive_largest_subnormal=SpecialFloatValue(
+        ref_float_value=_FLOAT8_E5M2_LARGEST_SUBNORMAL,
+        sign_encoding=str(0),
+        exponent_encoding=format(0, "05b"),
+        significand_encoding=format(3, "02b"),
+        description="largest positive subnormal",
+    ),
+    positive_smallest_subnormal=SpecialFloatValue(
+        ref_float_value=_FLOAT8_E5M2_SMALLEST_SUBNORMAL,
+        sign_encoding=str(0),
+        exponent_encoding=format(0, "05b"),
+        significand_encoding=format(1, "02b"),
+        description="smallest positive subnormal",
+    ),
+    negative_largest_subnormal=SpecialFloatValue(
+        ref_float_value=-_FLOAT8_E5M2_LARGEST_SUBNORMAL,
+        sign_encoding=str(1),
+        exponent_encoding=format(0, "05b"),
+        significand_encoding=format(3, "02b"),
+        description="most negative subnormal",
+    ),
+    negative_smallest_subnormal=SpecialFloatValue(
+        ref_float_value=-_FLOAT8_E5M2_SMALLEST_SUBNORMAL,
+        sign_encoding=str(1),
+        exponent_encoding=format(0, "05b"),
+        significand_encoding=format(1, "02b"),
+        description="negative subnormal closest to zero",
+    ),
+    positive_largest_power_of_two=SpecialFloatValue(
+        ref_float_value=_FLOAT8_E5M2_LARGEST_POWER_OF_TWO,
+        sign_encoding=str(0),
+        exponent_encoding=format(30, "05b"),
+        significand_encoding=format(0, "02b"),
+        description="largest positive power of two",
+    ),
+    positive_smallest_normal_power_of_two=SpecialFloatValue(
+        ref_float_value=torch.finfo(torch.float8_e5m2).tiny,
+        sign_encoding=str(0),
+        exponent_encoding=format(1, "05b"),
+        significand_encoding=format(0, "02b"),
+        description="smallest positive normal power of two",
+    ),
+    positive_smallest_subnormal_power_of_two=SpecialFloatValue(
+        ref_float_value=_FLOAT8_E5M2_SMALLEST_SUBNORMAL,
+        sign_encoding=str(0),
+        exponent_encoding=format(0, "05b"),
+        significand_encoding=format(1, "02b"),
+        description="smallest positive subnormal power of two",
+    ),
+    negative_largest_power_of_two=SpecialFloatValue(
+        ref_float_value=-_FLOAT8_E5M2_LARGEST_POWER_OF_TWO,
+        sign_encoding=str(1),
+        exponent_encoding=format(30, "05b"),
+        significand_encoding=format(0, "02b"),
+        description="negative power of two with largest magnitude",
+    ),
+    negative_smallest_normal_power_of_two=SpecialFloatValue(
+        ref_float_value=-torch.finfo(torch.float8_e5m2).tiny,
+        sign_encoding=str(1),
+        exponent_encoding=format(1, "05b"),
+        significand_encoding=format(0, "02b"),
+        description="negative normal power of two with smallest magnitude",
+    ),
+    negative_smallest_subnormal_power_of_two=SpecialFloatValue(
+        ref_float_value=-_FLOAT8_E5M2_SMALLEST_SUBNORMAL,
+        sign_encoding=str(1),
+        exponent_encoding=format(0, "05b"),
+        significand_encoding=format(1, "02b"),
+        description="negative subnormal power of two with smallest magnitude",
+    ),
+    positive_largest_integer=SpecialFloatValue(
+        ref_float_value=torch.finfo(torch.float8_e5m2).max,
+        sign_encoding=str(0),
+        exponent_encoding=format(30, "05b"),
+        significand_encoding=format(3, "02b"),
+        description="largest positive integer-valued float",
+    ),
+    negative_largest_integer=SpecialFloatValue(
+        ref_float_value=torch.finfo(torch.float8_e5m2).min,
+        sign_encoding=str(1),
+        exponent_encoding=format(30, "05b"),
+        significand_encoding=format(3, "02b"),
+        description="most negative integer-valued float",
+    ),
+    positive_largest_consecutive_integer=SpecialFloatValue(
+        ref_float_value=_FLOAT8_E5M2_LARGEST_CONSECUTIVE_INTEGER,
+        sign_encoding=str(0),
+        exponent_encoding=format(18, "05b"),
+        significand_encoding=format(0, "02b"),
+        description="largest positive consecutive integer",
+    ),
+    negative_largest_consecutive_integer=SpecialFloatValue(
+        ref_float_value=-_FLOAT8_E5M2_LARGEST_CONSECUTIVE_INTEGER,
+        sign_encoding=str(1),
+        exponent_encoding=format(18, "05b"),
+        significand_encoding=format(0, "02b"),
+        description="most negative consecutive integer",
+    ),
+    positive_number_example=SpecialFloatValue(
+        ref_float_value=40.0,
+        sign_encoding=str(0),
+        exponent_encoding=format(20, "05b"),
+        significand_encoding=format(1, "02b"),
+        description="positive example",
+    ),
+    negative_number_example=SpecialFloatValue(
+        ref_float_value=-32.0,
+        sign_encoding=str(1),
+        exponent_encoding=format(20, "05b"),
+        significand_encoding=format(0, "02b"),
+        description="negative example",
+    ),
+)
+
+# FLOAT8_E5M2FNUZ: no infinity; only NaN 0x80; no negative zero; max finite 57344.
+# torch.finfo(float8_e5m2fnuz).eps reports 0.125, but the ULP at 1.0 is 0.25.
+# FNUZ variants (Graphcore/AMD/Qualcomm):
+# https://github.com/openxla/stablehlo/blob/main/rfcs/20230321-fp8_fnuz.md
+# ml_dtypes format description:
+# https://github.com/jax-ml/ml_dtypes/blob/main/README.md#float8_e5m2fnuz
+# FLOAT8_E5M2FNUZ encoding constants.
+_FLOAT8_E5M2FNUZ_SIGNIFICAND_ALL_ONES: Final[int] = (1 << 2) - 1
+_FLOAT8_E5M2FNUZ_SMALLEST_SUBNORMAL: Final[float] = math.ldexp(1.0, -17)
+_FLOAT8_E5M2FNUZ_LARGEST_SUBNORMAL: Final[float] = math.ldexp(_FLOAT8_E5M2FNUZ_SIGNIFICAND_ALL_ONES, -17)
+_FLOAT8_E5M2FNUZ_LARGEST_POWER_OF_TWO: Final[float] = math.ldexp(1.0, 15)
+_FLOAT8_E5M2FNUZ_LARGEST_CONSECUTIVE_INTEGER: Final[float] = math.ldexp(1.0, 3)
+
+
+FLOAT8_E5M2FNUZ_SPEC: Final[FloatSpec] = FloatSpec(
+    torch_dtype=torch.float8_e5m2fnuz,
+    is_packed=False,
+    storage_bit_width=torch.finfo(torch.float8_e5m2fnuz).bits,
+    sign=BitField(start=7, end=7),
+    exponent=BitField(start=2, end=6),
+    significand=BitField(start=0, end=1),
+    exponent_bias=16,
+    has_implicit_leading_bit=True,
+    positive_zero=SpecialFloatValue(
+        ref_float_value=0.0,
+        sign_encoding=str(0),
+        exponent_encoding=format(0, "05b"),
+        significand_encoding=format(0, "02b"),
+        description="positive zero",
+    ),
+    negative_zero=None,
+    positive_infinity=None,
+    negative_infinity=None,
+    positive_nan=None,
+    negative_nan=SpecialFloatValue(
+        ref_float_value=-math.nan,
+        sign_encoding=str(1),
+        exponent_encoding=format(0, "05b"),
+        significand_encoding=format(0, "02b"),
+        description="negative quiet NaN",
+    ),
+    positive_largest_normal=SpecialFloatValue(
+        ref_float_value=torch.finfo(torch.float8_e5m2fnuz).max,
+        sign_encoding=str(0),
+        exponent_encoding=format(31, "05b"),
+        significand_encoding=format(3, "02b"),
+        description="largest positive normal",
+    ),
+    positive_smallest_normal=SpecialFloatValue(
+        ref_float_value=torch.finfo(torch.float8_e5m2fnuz).tiny,
+        sign_encoding=str(0),
+        exponent_encoding=format(1, "05b"),
+        significand_encoding=format(0, "02b"),
+        description="smallest positive normal",
+    ),
+    negative_largest_normal=SpecialFloatValue(
+        ref_float_value=torch.finfo(torch.float8_e5m2fnuz).min,
+        sign_encoding=str(1),
+        exponent_encoding=format(31, "05b"),
+        significand_encoding=format(3, "02b"),
+        description="most negative normal",
+    ),
+    negative_smallest_normal=SpecialFloatValue(
+        ref_float_value=-torch.finfo(torch.float8_e5m2fnuz).tiny,
+        sign_encoding=str(1),
+        exponent_encoding=format(1, "05b"),
+        significand_encoding=format(0, "02b"),
+        description="negative normal closest to zero",
+    ),
+    positive_largest_subnormal=SpecialFloatValue(
+        ref_float_value=_FLOAT8_E5M2FNUZ_LARGEST_SUBNORMAL,
+        sign_encoding=str(0),
+        exponent_encoding=format(0, "05b"),
+        significand_encoding=format(3, "02b"),
+        description="largest positive subnormal",
+    ),
+    positive_smallest_subnormal=SpecialFloatValue(
+        ref_float_value=_FLOAT8_E5M2FNUZ_SMALLEST_SUBNORMAL,
+        sign_encoding=str(0),
+        exponent_encoding=format(0, "05b"),
+        significand_encoding=format(1, "02b"),
+        description="smallest positive subnormal",
+    ),
+    negative_largest_subnormal=SpecialFloatValue(
+        ref_float_value=-_FLOAT8_E5M2FNUZ_LARGEST_SUBNORMAL,
+        sign_encoding=str(1),
+        exponent_encoding=format(0, "05b"),
+        significand_encoding=format(3, "02b"),
+        description="most negative subnormal",
+    ),
+    negative_smallest_subnormal=SpecialFloatValue(
+        ref_float_value=-_FLOAT8_E5M2FNUZ_SMALLEST_SUBNORMAL,
+        sign_encoding=str(1),
+        exponent_encoding=format(0, "05b"),
+        significand_encoding=format(1, "02b"),
+        description="negative subnormal closest to zero",
+    ),
+    positive_largest_power_of_two=SpecialFloatValue(
+        ref_float_value=_FLOAT8_E5M2FNUZ_LARGEST_POWER_OF_TWO,
+        sign_encoding=str(0),
+        exponent_encoding=format(31, "05b"),
+        significand_encoding=format(0, "02b"),
+        description="largest positive power of two",
+    ),
+    positive_smallest_normal_power_of_two=SpecialFloatValue(
+        ref_float_value=torch.finfo(torch.float8_e5m2fnuz).tiny,
+        sign_encoding=str(0),
+        exponent_encoding=format(1, "05b"),
+        significand_encoding=format(0, "02b"),
+        description="smallest positive normal power of two",
+    ),
+    positive_smallest_subnormal_power_of_two=SpecialFloatValue(
+        ref_float_value=_FLOAT8_E5M2FNUZ_SMALLEST_SUBNORMAL,
+        sign_encoding=str(0),
+        exponent_encoding=format(0, "05b"),
+        significand_encoding=format(1, "02b"),
+        description="smallest positive subnormal power of two",
+    ),
+    negative_largest_power_of_two=SpecialFloatValue(
+        ref_float_value=-_FLOAT8_E5M2FNUZ_LARGEST_POWER_OF_TWO,
+        sign_encoding=str(1),
+        exponent_encoding=format(31, "05b"),
+        significand_encoding=format(0, "02b"),
+        description="negative power of two with largest magnitude",
+    ),
+    negative_smallest_normal_power_of_two=SpecialFloatValue(
+        ref_float_value=-torch.finfo(torch.float8_e5m2fnuz).tiny,
+        sign_encoding=str(1),
+        exponent_encoding=format(1, "05b"),
+        significand_encoding=format(0, "02b"),
+        description="negative normal power of two with smallest magnitude",
+    ),
+    negative_smallest_subnormal_power_of_two=SpecialFloatValue(
+        ref_float_value=-_FLOAT8_E5M2FNUZ_SMALLEST_SUBNORMAL,
+        sign_encoding=str(1),
+        exponent_encoding=format(0, "05b"),
+        significand_encoding=format(1, "02b"),
+        description="negative subnormal power of two with smallest magnitude",
+    ),
+    positive_largest_integer=SpecialFloatValue(
+        ref_float_value=torch.finfo(torch.float8_e5m2fnuz).max,
+        sign_encoding=str(0),
+        exponent_encoding=format(31, "05b"),
+        significand_encoding=format(3, "02b"),
+        description="largest positive integer-valued float",
+    ),
+    negative_largest_integer=SpecialFloatValue(
+        ref_float_value=torch.finfo(torch.float8_e5m2fnuz).min,
+        sign_encoding=str(1),
+        exponent_encoding=format(31, "05b"),
+        significand_encoding=format(3, "02b"),
+        description="most negative integer-valued float",
+    ),
+    positive_largest_consecutive_integer=SpecialFloatValue(
+        ref_float_value=_FLOAT8_E5M2FNUZ_LARGEST_CONSECUTIVE_INTEGER,
+        sign_encoding=str(0),
+        exponent_encoding=format(19, "05b"),
+        significand_encoding=format(0, "02b"),
+        description="largest positive consecutive integer",
+    ),
+    negative_largest_consecutive_integer=SpecialFloatValue(
+        ref_float_value=-_FLOAT8_E5M2FNUZ_LARGEST_CONSECUTIVE_INTEGER,
+        sign_encoding=str(1),
+        exponent_encoding=format(19, "05b"),
+        significand_encoding=format(0, "02b"),
+        description="most negative consecutive integer",
+    ),
+    positive_number_example=SpecialFloatValue(
+        ref_float_value=40.0,
+        sign_encoding=str(0),
+        exponent_encoding=format(21, "05b"),
+        significand_encoding=format(1, "02b"),
+        description="positive example",
+    ),
+    negative_number_example=SpecialFloatValue(
+        ref_float_value=-32.0,
+        sign_encoding=str(1),
+        exponent_encoding=format(21, "05b"),
+        significand_encoding=format(0, "02b"),
+        description="negative example",
+    ),
+)
