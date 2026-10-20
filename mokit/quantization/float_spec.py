@@ -2737,3 +2737,30 @@ FLOAT4_E2M1FN_x2_SPEC: Final[FloatSpec] = FloatSpec(
         description="negative example",
     ),
 )
+
+
+# Both torch dtypes and their string names are accepted; FP6 only has string names.
+FLOAT_SPEC_TABLE: Final[dict[torch.dtype | str, FloatSpec]] = {
+    torch.float64: FLOAT64_SPEC,
+    "float64": FLOAT64_SPEC,
+    torch.float32: FLOAT32_SPEC,
+    "float32": FLOAT32_SPEC,
+    torch.float16: FLOAT16_SPEC,
+    "float16": FLOAT16_SPEC,
+    torch.bfloat16: BFLOAT16_SPEC,
+    "bfloat16": BFLOAT16_SPEC,
+    torch.float8_e4m3fn: FLOAT8_E4M3FN_SPEC,
+    "float8_e4m3fn": FLOAT8_E4M3FN_SPEC,
+    torch.float8_e4m3fnuz: FLOAT8_E4M3FNUZ_SPEC,
+    "float8_e4m3fnuz": FLOAT8_E4M3FNUZ_SPEC,
+    torch.float8_e5m2: FLOAT8_E5M2_SPEC,
+    "float8_e5m2": FLOAT8_E5M2_SPEC,
+    torch.float8_e5m2fnuz: FLOAT8_E5M2FNUZ_SPEC,
+    "float8_e5m2fnuz": FLOAT8_E5M2FNUZ_SPEC,
+    torch.float8_e8m0fnu: FLOAT8_E8M0FNU_SPEC,
+    "float8_e8m0fnu": FLOAT8_E8M0FNU_SPEC,
+    torch.float4_e2m1fn_x2: FLOAT4_E2M1FN_x2_SPEC,
+    "float4_e2m1fn_x2": FLOAT4_E2M1FN_x2_SPEC,
+    "float6_e2m3fn": FLOAT6_E2M3_SPEC,
+    "float6_e3m2fn": FLOAT6_E3M2_SPEC,
+}
