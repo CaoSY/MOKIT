@@ -2764,3 +2764,5 @@ FLOAT_SPEC_TABLE: Final[dict[torch.dtype | str, FloatSpec]] = {
     "float6_e2m3fn": FLOAT6_E2M3_SPEC,
     "float6_e3m2fn": FLOAT6_E3M2_SPEC,
 }
+
+__all__ = ["FLOAT_SPEC_TABLE"]
