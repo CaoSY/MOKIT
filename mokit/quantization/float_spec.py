@@ -2552,7 +2552,7 @@ FLOAT6_E3M2_SPEC: Final[FloatSpec] = FloatSpec(
 
 
 # FLOAT4_E2M1: 1/2/1, bias 1; max finite 6; no Inf/NaN.
-# torch.float4_e2m1fn_x2 packs two 4-bit elements per byte; register_bit_width is per element.
+# torch.float4_e2m1fn_x2 packs two 4-bit elements per byte; register_bit_width is the 8-bit packed register.
 # OCP Microscaling Formats (MX) Specification v1.0:
 # https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
 # ml_dtypes:
@@ -2568,10 +2568,10 @@ _FLOAT4_E2M1FN_LARGEST_INTEGER: Final[float] = 6.0
 _FLOAT4_E2M1FN_LARGEST_CONSECUTIVE_INTEGER: Final[float] = 4.0
 
 
-FLOAT4_E2M1FN_SPEC: Final[FloatSpec] = FloatSpec(
+FLOAT4_E2M1FN_x2_SPEC: Final[FloatSpec] = FloatSpec(
     torch_dtype=torch.float4_e2m1fn_x2,
     is_packed=True,
-    register_bit_width=4,
+    register_bit_width=torch.finfo(torch.float4_e2m1fn_x2).bits,
     sign=BitField(start=3, end=3),
     exponent=BitField(start=1, end=2),
     significand=BitField(start=0, end=0),
