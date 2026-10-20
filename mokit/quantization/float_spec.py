@@ -1909,6 +1909,7 @@ FLOAT8_E5M2_SPEC: Final[FloatSpec] = FloatSpec(
 # https://github.com/pytorch/pytorch/issues/198854
 # Fix: https://github.com/pytorch/pytorch/pull/198855
 # Fixed upstream in commit 74c343b (2026-09-29); torch 2.14.0 and 2.14.1 still report 0.125.
+# TODO: restore eps=torch.finfo(torch.float8_e5m2fnuz).eps after a future PyTorch upgrade includes the fix.
 # FNUZ variants (Graphcore/AMD/Qualcomm):
 # https://github.com/openxla/stablehlo/blob/main/rfcs/20230321-fp8_fnuz.md
 # ml_dtypes format description:
