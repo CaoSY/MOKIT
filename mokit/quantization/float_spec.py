@@ -2180,3 +2180,370 @@ FLOAT8_E8M0FNU_SPEC: Final[FloatSpec] = FloatSpec(
     ),
     negative_number_example=None,
 )
+# FLOAT6_E2M3: 1/2/3, bias 1; max finite 7.5; stored one per uint8 (upper 2 bits unused).
+# OCP Microscaling Formats (MX) Specification v1.0; FP6 has no Inf or NaN:
+# https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
+# ml_dtypes: https://github.com/jax-ml/ml_dtypes/blob/main/README.md#float6_e2m3fn
+# ONNX: https://onnx.ai/onnx/technical/float6.html
+# FLOAT6_E2M3 encoding constants.
+_FLOAT6_E2M3_SIGNIFICAND_ALL_ONES: Final[int] = (1 << 3) - 1
+_FLOAT6_E2M3_SMALLEST_SUBNORMAL: Final[float] = math.ldexp(1.0, -3)
+_FLOAT6_E2M3_LARGEST_SUBNORMAL: Final[float] = math.ldexp(_FLOAT6_E2M3_SIGNIFICAND_ALL_ONES, -3)
+_FLOAT6_E2M3_LARGEST_POWER_OF_TWO: Final[float] = math.ldexp(1.0, 2)
+_FLOAT6_E2M3_LARGEST_INTEGER: Final[float] = 7.0
+_FLOAT6_E2M3_LARGEST_CONSECUTIVE_INTEGER: Final[float] = 7.0
+
+
+FLOAT6_E2M3_SPEC: Final[FloatSpec] = FloatSpec(
+    torch_dtype=torch.uint8,
+    is_packed=False,
+    storage_bit_width=torch.iinfo(torch.uint8).bits,
+    sign=BitField(start=5, end=5),
+    exponent=BitField(start=3, end=4),
+    significand=BitField(start=0, end=2),
+    exponent_bias=1,
+    has_implicit_leading_bit=True,
+    eps=0.125,
+    positive_zero=SpecialFloatValue(
+        ref_float_value=0.0,
+        sign_encoding=str(0),
+        exponent_encoding=format(0, "02b"),
+        significand_encoding=format(0, "03b"),
+        description="positive zero",
+    ),
+    negative_zero=SpecialFloatValue(
+        ref_float_value=-0.0,
+        sign_encoding=str(1),
+        exponent_encoding=format(0, "02b"),
+        significand_encoding=format(0, "03b"),
+        description="negative zero",
+    ),
+    positive_infinity=None,
+    negative_infinity=None,
+    positive_nan=None,
+    negative_nan=None,
+    positive_largest_normal=SpecialFloatValue(
+        ref_float_value=7.5,
+        sign_encoding=str(0),
+        exponent_encoding=format(3, "02b"),
+        significand_encoding=format(7, "03b"),
+        description="largest positive normal",
+    ),
+    positive_smallest_normal=SpecialFloatValue(
+        ref_float_value=1.0,
+        sign_encoding=str(0),
+        exponent_encoding=format(1, "02b"),
+        significand_encoding=format(0, "03b"),
+        description="smallest positive normal",
+    ),
+    negative_largest_normal=SpecialFloatValue(
+        ref_float_value=-7.5,
+        sign_encoding=str(1),
+        exponent_encoding=format(3, "02b"),
+        significand_encoding=format(7, "03b"),
+        description="most negative normal",
+    ),
+    negative_smallest_normal=SpecialFloatValue(
+        ref_float_value=-1.0,
+        sign_encoding=str(1),
+        exponent_encoding=format(1, "02b"),
+        significand_encoding=format(0, "03b"),
+        description="negative normal closest to zero",
+    ),
+    positive_largest_subnormal=SpecialFloatValue(
+        ref_float_value=_FLOAT6_E2M3_LARGEST_SUBNORMAL,
+        sign_encoding=str(0),
+        exponent_encoding=format(0, "02b"),
+        significand_encoding=format(7, "03b"),
+        description="largest positive subnormal",
+    ),
+    positive_smallest_subnormal=SpecialFloatValue(
+        ref_float_value=_FLOAT6_E2M3_SMALLEST_SUBNORMAL,
+        sign_encoding=str(0),
+        exponent_encoding=format(0, "02b"),
+        significand_encoding=format(1, "03b"),
+        description="smallest positive subnormal",
+    ),
+    negative_largest_subnormal=SpecialFloatValue(
+        ref_float_value=-_FLOAT6_E2M3_LARGEST_SUBNORMAL,
+        sign_encoding=str(1),
+        exponent_encoding=format(0, "02b"),
+        significand_encoding=format(7, "03b"),
+        description="most negative subnormal",
+    ),
+    negative_smallest_subnormal=SpecialFloatValue(
+        ref_float_value=-_FLOAT6_E2M3_SMALLEST_SUBNORMAL,
+        sign_encoding=str(1),
+        exponent_encoding=format(0, "02b"),
+        significand_encoding=format(1, "03b"),
+        description="negative subnormal closest to zero",
+    ),
+    positive_largest_power_of_two=SpecialFloatValue(
+        ref_float_value=_FLOAT6_E2M3_LARGEST_POWER_OF_TWO,
+        sign_encoding=str(0),
+        exponent_encoding=format(3, "02b"),
+        significand_encoding=format(0, "03b"),
+        description="largest positive power of two",
+    ),
+    positive_smallest_normal_power_of_two=SpecialFloatValue(
+        ref_float_value=1.0,
+        sign_encoding=str(0),
+        exponent_encoding=format(1, "02b"),
+        significand_encoding=format(0, "03b"),
+        description="smallest positive normal power of two",
+    ),
+    positive_smallest_subnormal_power_of_two=SpecialFloatValue(
+        ref_float_value=_FLOAT6_E2M3_SMALLEST_SUBNORMAL,
+        sign_encoding=str(0),
+        exponent_encoding=format(0, "02b"),
+        significand_encoding=format(1, "03b"),
+        description="smallest positive subnormal power of two",
+    ),
+    negative_largest_power_of_two=SpecialFloatValue(
+        ref_float_value=-_FLOAT6_E2M3_LARGEST_POWER_OF_TWO,
+        sign_encoding=str(1),
+        exponent_encoding=format(3, "02b"),
+        significand_encoding=format(0, "03b"),
+        description="negative power of two with largest magnitude",
+    ),
+    negative_smallest_normal_power_of_two=SpecialFloatValue(
+        ref_float_value=-1.0,
+        sign_encoding=str(1),
+        exponent_encoding=format(1, "02b"),
+        significand_encoding=format(0, "03b"),
+        description="negative normal power of two with smallest magnitude",
+    ),
+    negative_smallest_subnormal_power_of_two=SpecialFloatValue(
+        ref_float_value=-_FLOAT6_E2M3_SMALLEST_SUBNORMAL,
+        sign_encoding=str(1),
+        exponent_encoding=format(0, "02b"),
+        significand_encoding=format(1, "03b"),
+        description="negative subnormal power of two with smallest magnitude",
+    ),
+    positive_largest_integer=SpecialFloatValue(
+        ref_float_value=_FLOAT6_E2M3_LARGEST_INTEGER,
+        sign_encoding=str(0),
+        exponent_encoding=format(3, "02b"),
+        significand_encoding=format(6, "03b"),
+        description="largest positive integer-valued float",
+    ),
+    negative_largest_integer=SpecialFloatValue(
+        ref_float_value=-_FLOAT6_E2M3_LARGEST_INTEGER,
+        sign_encoding=str(1),
+        exponent_encoding=format(3, "02b"),
+        significand_encoding=format(6, "03b"),
+        description="most negative integer-valued float",
+    ),
+    positive_largest_consecutive_integer=SpecialFloatValue(
+        ref_float_value=_FLOAT6_E2M3_LARGEST_CONSECUTIVE_INTEGER,
+        sign_encoding=str(0),
+        exponent_encoding=format(3, "02b"),
+        significand_encoding=format(6, "03b"),
+        description="largest positive consecutive integer",
+    ),
+    negative_largest_consecutive_integer=SpecialFloatValue(
+        ref_float_value=-_FLOAT6_E2M3_LARGEST_CONSECUTIVE_INTEGER,
+        sign_encoding=str(1),
+        exponent_encoding=format(3, "02b"),
+        significand_encoding=format(6, "03b"),
+        description="most negative consecutive integer",
+    ),
+    positive_number_example=SpecialFloatValue(
+        ref_float_value=3.5,
+        sign_encoding=str(0),
+        exponent_encoding=format(2, "02b"),
+        significand_encoding=format(6, "03b"),
+        description="positive example",
+    ),
+    negative_number_example=SpecialFloatValue(
+        ref_float_value=-2.0,
+        sign_encoding=str(1),
+        exponent_encoding=format(2, "02b"),
+        significand_encoding=format(0, "03b"),
+        description="negative example",
+    ),
+)
+
+# FLOAT6_E3M2: 1/3/2, bias 3; max finite 28; stored one per uint8 (upper 2 bits unused).
+# OCP Microscaling Formats (MX) Specification v1.0; FP6 has no Inf or NaN:
+# https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
+# ml_dtypes: https://github.com/jax-ml/ml_dtypes/blob/main/README.md#float6_e3m2fn
+# ONNX: https://onnx.ai/onnx/technical/float6.html
+# FLOAT6_E3M2 encoding constants.
+_FLOAT6_E3M2_SIGNIFICAND_ALL_ONES: Final[int] = (1 << 2) - 1
+_FLOAT6_E3M2_SMALLEST_SUBNORMAL: Final[float] = math.ldexp(1.0, -4)
+_FLOAT6_E3M2_LARGEST_SUBNORMAL: Final[float] = math.ldexp(_FLOAT6_E3M2_SIGNIFICAND_ALL_ONES, -4)
+_FLOAT6_E3M2_LARGEST_POWER_OF_TWO: Final[float] = math.ldexp(1.0, 4)
+_FLOAT6_E3M2_LARGEST_INTEGER: Final[float] = 28.0
+_FLOAT6_E3M2_LARGEST_CONSECUTIVE_INTEGER: Final[float] = 8.0
+
+
+FLOAT6_E3M2_SPEC: Final[FloatSpec] = FloatSpec(
+    torch_dtype=torch.uint8,
+    is_packed=False,
+    storage_bit_width=torch.iinfo(torch.uint8).bits,
+    sign=BitField(start=5, end=5),
+    exponent=BitField(start=2, end=4),
+    significand=BitField(start=0, end=1),
+    exponent_bias=3,
+    has_implicit_leading_bit=True,
+    eps=0.25,
+    positive_zero=SpecialFloatValue(
+        ref_float_value=0.0,
+        sign_encoding=str(0),
+        exponent_encoding=format(0, "03b"),
+        significand_encoding=format(0, "02b"),
+        description="positive zero",
+    ),
+    negative_zero=SpecialFloatValue(
+        ref_float_value=-0.0,
+        sign_encoding=str(1),
+        exponent_encoding=format(0, "03b"),
+        significand_encoding=format(0, "02b"),
+        description="negative zero",
+    ),
+    positive_infinity=None,
+    negative_infinity=None,
+    positive_nan=None,
+    negative_nan=None,
+    positive_largest_normal=SpecialFloatValue(
+        ref_float_value=28.0,
+        sign_encoding=str(0),
+        exponent_encoding=format(7, "03b"),
+        significand_encoding=format(3, "02b"),
+        description="largest positive normal",
+    ),
+    positive_smallest_normal=SpecialFloatValue(
+        ref_float_value=0.25,
+        sign_encoding=str(0),
+        exponent_encoding=format(1, "03b"),
+        significand_encoding=format(0, "02b"),
+        description="smallest positive normal",
+    ),
+    negative_largest_normal=SpecialFloatValue(
+        ref_float_value=-28.0,
+        sign_encoding=str(1),
+        exponent_encoding=format(7, "03b"),
+        significand_encoding=format(3, "02b"),
+        description="most negative normal",
+    ),
+    negative_smallest_normal=SpecialFloatValue(
+        ref_float_value=-0.25,
+        sign_encoding=str(1),
+        exponent_encoding=format(1, "03b"),
+        significand_encoding=format(0, "02b"),
+        description="negative normal closest to zero",
+    ),
+    positive_largest_subnormal=SpecialFloatValue(
+        ref_float_value=_FLOAT6_E3M2_LARGEST_SUBNORMAL,
+        sign_encoding=str(0),
+        exponent_encoding=format(0, "03b"),
+        significand_encoding=format(3, "02b"),
+        description="largest positive subnormal",
+    ),
+    positive_smallest_subnormal=SpecialFloatValue(
+        ref_float_value=_FLOAT6_E3M2_SMALLEST_SUBNORMAL,
+        sign_encoding=str(0),
+        exponent_encoding=format(0, "03b"),
+        significand_encoding=format(1, "02b"),
+        description="smallest positive subnormal",
+    ),
+    negative_largest_subnormal=SpecialFloatValue(
+        ref_float_value=-_FLOAT6_E3M2_LARGEST_SUBNORMAL,
+        sign_encoding=str(1),
+        exponent_encoding=format(0, "03b"),
+        significand_encoding=format(3, "02b"),
+        description="most negative subnormal",
+    ),
+    negative_smallest_subnormal=SpecialFloatValue(
+        ref_float_value=-_FLOAT6_E3M2_SMALLEST_SUBNORMAL,
+        sign_encoding=str(1),
+        exponent_encoding=format(0, "03b"),
+        significand_encoding=format(1, "02b"),
+        description="negative subnormal closest to zero",
+    ),
+    positive_largest_power_of_two=SpecialFloatValue(
+        ref_float_value=_FLOAT6_E3M2_LARGEST_POWER_OF_TWO,
+        sign_encoding=str(0),
+        exponent_encoding=format(7, "03b"),
+        significand_encoding=format(0, "02b"),
+        description="largest positive power of two",
+    ),
+    positive_smallest_normal_power_of_two=SpecialFloatValue(
+        ref_float_value=0.25,
+        sign_encoding=str(0),
+        exponent_encoding=format(1, "03b"),
+        significand_encoding=format(0, "02b"),
+        description="smallest positive normal power of two",
+    ),
+    positive_smallest_subnormal_power_of_two=SpecialFloatValue(
+        ref_float_value=_FLOAT6_E3M2_SMALLEST_SUBNORMAL,
+        sign_encoding=str(0),
+        exponent_encoding=format(0, "03b"),
+        significand_encoding=format(1, "02b"),
+        description="smallest positive subnormal power of two",
+    ),
+    negative_largest_power_of_two=SpecialFloatValue(
+        ref_float_value=-_FLOAT6_E3M2_LARGEST_POWER_OF_TWO,
+        sign_encoding=str(1),
+        exponent_encoding=format(7, "03b"),
+        significand_encoding=format(0, "02b"),
+        description="negative power of two with largest magnitude",
+    ),
+    negative_smallest_normal_power_of_two=SpecialFloatValue(
+        ref_float_value=-0.25,
+        sign_encoding=str(1),
+        exponent_encoding=format(1, "03b"),
+        significand_encoding=format(0, "02b"),
+        description="negative normal power of two with smallest magnitude",
+    ),
+    negative_smallest_subnormal_power_of_two=SpecialFloatValue(
+        ref_float_value=-_FLOAT6_E3M2_SMALLEST_SUBNORMAL,
+        sign_encoding=str(1),
+        exponent_encoding=format(0, "03b"),
+        significand_encoding=format(1, "02b"),
+        description="negative subnormal power of two with smallest magnitude",
+    ),
+    positive_largest_integer=SpecialFloatValue(
+        ref_float_value=_FLOAT6_E3M2_LARGEST_INTEGER,
+        sign_encoding=str(0),
+        exponent_encoding=format(7, "03b"),
+        significand_encoding=format(3, "02b"),
+        description="largest positive integer-valued float",
+    ),
+    negative_largest_integer=SpecialFloatValue(
+        ref_float_value=-_FLOAT6_E3M2_LARGEST_INTEGER,
+        sign_encoding=str(1),
+        exponent_encoding=format(7, "03b"),
+        significand_encoding=format(3, "02b"),
+        description="most negative integer-valued float",
+    ),
+    positive_largest_consecutive_integer=SpecialFloatValue(
+        ref_float_value=_FLOAT6_E3M2_LARGEST_CONSECUTIVE_INTEGER,
+        sign_encoding=str(0),
+        exponent_encoding=format(6, "03b"),
+        significand_encoding=format(0, "02b"),
+        description="largest positive consecutive integer",
+    ),
+    negative_largest_consecutive_integer=SpecialFloatValue(
+        ref_float_value=-_FLOAT6_E3M2_LARGEST_CONSECUTIVE_INTEGER,
+        sign_encoding=str(1),
+        exponent_encoding=format(6, "03b"),
+        significand_encoding=format(0, "02b"),
+        description="most negative consecutive integer",
+    ),
+    positive_number_example=SpecialFloatValue(
+        ref_float_value=3.5,
+        sign_encoding=str(0),
+        exponent_encoding=format(4, "03b"),
+        significand_encoding=format(3, "02b"),
+        description="positive example",
+    ),
+    negative_number_example=SpecialFloatValue(
+        ref_float_value=-2.0,
+        sign_encoding=str(1),
+        exponent_encoding=format(4, "03b"),
+        significand_encoding=format(0, "02b"),
+        description="negative example",
+    ),
+)
