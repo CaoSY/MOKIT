@@ -170,6 +170,8 @@ class FloatSpec(MokitConfigBase):
         has_implicit_leading_bit: Whether normal values have an implicit leading one. This can be True
             even when the format has no significand field, as in E8M0.
 
+        eps: Difference between 1.0 and the next representable value.
+
         positive_zero: Positive zero, or ``None`` if the format has no zero.
         negative_zero: Negative zero, or ``None`` if the format has no negative zero.
 
@@ -241,6 +243,8 @@ class FloatSpec(MokitConfigBase):
     exponent_bias: int
     has_implicit_leading_bit: bool
 
+    eps: float
+
     @property
     def is_signed(self) -> bool:
         """Return whether the format has a sign bit."""
@@ -303,6 +307,11 @@ class FloatSpec(MokitConfigBase):
 
         if self.storage_bit_width <= 0:
             raise ValueError(f"storage_bit_width must be positive, got {self.storage_bit_width}")
+
+        if not isinstance(self.eps, float):
+            raise TypeError(f"eps must be a float, got {type(self.eps).__name__}")
+        if self.eps <= 0:
+            raise ValueError(f"eps must be positive, got {self.eps}")
 
         if not isinstance(self.exponent, BitField):
             raise TypeError(f"exponent must be a BitField, got {type(self.exponent).__name__}")
@@ -480,6 +489,7 @@ FLOAT64_SPEC: Final[FloatSpec] = FloatSpec(
     significand=BitField(start=0, end=51),
     exponent_bias=1023,
     has_implicit_leading_bit=True,
+    eps=torch.finfo(torch.float64).eps,
     positive_zero=SpecialFloatValue(
         ref_float_value=0.0,
         sign_encoding=str(0),
@@ -687,6 +697,7 @@ FLOAT32_SPEC: Final[FloatSpec] = FloatSpec(
     significand=BitField(start=0, end=22),
     exponent_bias=127,
     has_implicit_leading_bit=True,
+    eps=torch.finfo(torch.float32).eps,
     positive_zero=SpecialFloatValue(
         ref_float_value=0.0,
         sign_encoding=str(0),
@@ -894,6 +905,7 @@ FLOAT16_SPEC: Final[FloatSpec] = FloatSpec(
     significand=BitField(start=0, end=9),
     exponent_bias=15,
     has_implicit_leading_bit=True,
+    eps=torch.finfo(torch.float16).eps,
     positive_zero=SpecialFloatValue(
         ref_float_value=0.0,
         sign_encoding=str(0),
@@ -1120,6 +1132,7 @@ BFLOAT16_SPEC: Final[FloatSpec] = FloatSpec(
     significand=BitField(start=0, end=6),
     exponent_bias=127,
     has_implicit_leading_bit=True,
+    eps=torch.finfo(torch.bfloat16).eps,
     positive_zero=SpecialFloatValue(
         ref_float_value=0.0,
         sign_encoding=str(0),
@@ -1326,6 +1339,7 @@ FLOAT8_E4M3FN_SPEC: Final[FloatSpec] = FloatSpec(
     significand=BitField(start=0, end=2),
     exponent_bias=7,
     has_implicit_leading_bit=True,
+    eps=torch.finfo(torch.float8_e4m3fn).eps,
     positive_zero=SpecialFloatValue(
         ref_float_value=0.0,
         sign_encoding=str(0),
@@ -1520,6 +1534,7 @@ FLOAT8_E4M3FNUZ_SPEC: Final[FloatSpec] = FloatSpec(
     significand=BitField(start=0, end=2),
     exponent_bias=8,
     has_implicit_leading_bit=True,
+    eps=torch.finfo(torch.float8_e4m3fnuz).eps,
     positive_zero=SpecialFloatValue(
         ref_float_value=0.0,
         sign_encoding=str(0),
@@ -1702,6 +1717,7 @@ FLOAT8_E5M2_SPEC: Final[FloatSpec] = FloatSpec(
     significand=BitField(start=0, end=1),
     exponent_bias=15,
     has_implicit_leading_bit=True,
+    eps=torch.finfo(torch.float8_e5m2).eps,
     positive_zero=SpecialFloatValue(
         ref_float_value=0.0,
         sign_encoding=str(0),
@@ -1887,7 +1903,12 @@ FLOAT8_E5M2_SPEC: Final[FloatSpec] = FloatSpec(
 )
 
 # FLOAT8_E5M2FNUZ: no infinity; only NaN 0x80; no negative zero; max finite 57344.
-# torch.finfo(float8_e5m2fnuz).eps reports 0.125, but the ULP at 1.0 is 0.25.
+# torch.finfo(float8_e5m2fnuz).eps reports 0.125; the actual ULP at 1.0 is 0.25.
+# This spec stores the correct 0.25.
+# PyTorch bug: numeric_limits uses e5m2's bit patterns without the FNUZ bias adjustment.
+# https://github.com/pytorch/pytorch/issues/198854
+# Fix: https://github.com/pytorch/pytorch/pull/198855
+# Fixed upstream in commit 74c343b (2026-09-29); torch 2.14.0 and 2.14.1 still report 0.125.
 # FNUZ variants (Graphcore/AMD/Qualcomm):
 # https://github.com/openxla/stablehlo/blob/main/rfcs/20230321-fp8_fnuz.md
 # ml_dtypes format description:
@@ -1909,6 +1930,7 @@ FLOAT8_E5M2FNUZ_SPEC: Final[FloatSpec] = FloatSpec(
     significand=BitField(start=0, end=1),
     exponent_bias=16,
     has_implicit_leading_bit=True,
+    eps=0.25,
     positive_zero=SpecialFloatValue(
         ref_float_value=0.0,
         sign_encoding=str(0),
