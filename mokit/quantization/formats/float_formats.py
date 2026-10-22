@@ -22,12 +22,11 @@ class FloatFormat(MokitConfigBase):
     """
     A floating-point quantization format.
 
+    This class describes the format only; conversion settings live in :class:`FloatQuantConfig`.
+
     Attributes:
         elem_dtype: Data type of the quantized elements. Must be one of ``REDUCED_PRECISION_DTYPES``.
             Defaults to ``torch.float8_e4m3fn``.
-
-        rounding_mode: Rounding mode used when casting high-precision values to ``elem_dtype``. See
-            ``QuantizationRoundingMode`` for the available modes. Defaults to ``QuantizationRoundingMode.RNE``.
 
         scale_dtype: Data type of the scale. Must be one of ``HIGH_PRECISION_DTYPES``;
             ``torch.float8_e8m0fnu`` is rejected, since that is an MX scale. Defaults to ``torch.float32``.
@@ -37,7 +36,6 @@ class FloatFormat(MokitConfigBase):
     """
 
     elem_dtype: Final[torch.dtype] = torch.float8_e4m3fn
-    rounding_mode: Final[QuantizationRoundingMode] = QuantizationRoundingMode.RNE
     scale_dtype: Final[torch.dtype] = torch.float32
     granularity: Final[Granularity] = DEFAULT_GRANULARITY
 
@@ -46,10 +44,31 @@ class FloatFormat(MokitConfigBase):
         if self.elem_dtype not in REDUCED_PRECISION_DTYPES:
             raise ValueError(f"elem_dtype must be one of {REDUCED_PRECISION_DTYPES}, got {self.elem_dtype}")
 
-        if not isinstance(self.rounding_mode, QuantizationRoundingMode):
-            raise ValueError(f"rounding_mode must be of type QuantizationRoundingMode, got {type(self.rounding_mode)}")
-
         if self.scale_dtype is torch.float8_e8m0fnu:
             raise ValueError(f"If the scale's dtype is {torch.float8_e8m0fnu}, use MXFormat instead.")
         elif self.scale_dtype not in HIGH_PRECISION_DTYPES:
             raise ValueError(f"scale_dtype only supports {HIGH_PRECISION_DTYPES}, got {self.scale_dtype}")
+
+
+@torch_add_safe_global
+@dataclass(frozen=True, slots=True, kw_only=True)
+class FloatQuantConfig(FloatFormat):
+    """
+    Conversion settings for a floating-point quantization format.
+
+    The format fields are inherited from :class:`FloatFormat`.
+
+    Attributes:
+        rounding_mode: Rounding mode used when casting high-precision values to ``elem_dtype``. See
+            ``QuantizationRoundingMode`` for the available modes. Defaults to ``QuantizationRoundingMode.RNE``.
+
+    """
+
+    rounding_mode: Final[QuantizationRoundingMode] = QuantizationRoundingMode.RNE
+
+    def __post_init__(self) -> None:
+        """Validate the conversion settings on top of the base format checks."""
+        FloatFormat.__post_init__(self)
+
+        if not isinstance(self.rounding_mode, QuantizationRoundingMode):
+            raise ValueError(f"rounding_mode must be of type QuantizationRoundingMode, got {type(self.rounding_mode)}")
