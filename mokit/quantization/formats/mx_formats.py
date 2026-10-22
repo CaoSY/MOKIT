@@ -58,21 +58,13 @@ class MXFormat(MokitConfigBase):
     See the `OCP Microscaling Formats (MX) Specification v1.0
     <https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf/>`_.
 
+    This class describes the format only; conversion settings live in :class:`MXQuantConfig`.
+
     Attributes:
         elem_dtype: Data type of the quantized elements. Must be one of ``MX_ELEM_DTYPES``. Defaults to
             ``torch.float8_e4m3fn``.
 
-        rounding_mode: Rounding mode used when casting high-precision values to ``elem_dtype``. See
-            ``QuantizationRoundingMode`` for the available modes. Defaults to ``QuantizationRoundingMode.RNE``.
-
-        elem_dtype_max: the reference dtype maximum when calculating scales. A float for floating dtypes and an
-            int for integer dtypes. Defaults to ``None``, in which case ``elem_dtype_max`` is set to the largest
-            representable value from ``elem_dtype``.
-
         scale_dtype: Data type of the per-block scale. Fixed at E8M0 by the MX spec. Defaults to ``MX_SCALE_DTYPE``.
-
-        scale_mode: Method used to calculate the per-block scale. See ``MXScaleCalculationMode`` for the available
-            methods. Defaults to ``MXScaleCalculationMode.RCEIL``.
 
         granularity: Granularity of the quantization blocks. Must be a ``PerBlock`` with positive
             per-dimension sizes. Defaults to ``MX_DEFAULT_GRANULARITY``.
@@ -80,18 +72,57 @@ class MXFormat(MokitConfigBase):
     """
 
     elem_dtype: Final[torch.dtype] = torch.float8_e4m3fn
-    rounding_mode: Final[QuantizationRoundingMode] = QuantizationRoundingMode.RNE
-    elem_dtype_max: Final[float | int | None] = None
 
     scale_dtype: Final[torch.dtype] = MX_SCALE_DTYPE
-    scale_mode: Final[MXScaleCalculationMode] = MXScaleCalculationMode.RCEIL
 
     granularity: PerBlock = MX_DEFAULT_GRANULARITY
 
     def __post_init__(self) -> None:
-        """Validate the field values and derive ``elem_dtype_max`` if unset."""
+        """Validate the format fields."""
         if self.elem_dtype not in MX_ELEM_DTYPES:
             raise ValueError(f"Supported element dtypes are {MX_ELEM_DTYPES}, got {self.elem_dtype}")
+
+        if self.scale_dtype is not MX_SCALE_DTYPE:
+            raise ValueError(f"The scale dtype is fixed at E8M0 by the MX spec, got {self.scale_dtype}")
+
+        if not isinstance(self.granularity, PerBlock):
+            raise ValueError(f"MXFormat.granularity must be of type PerBlock, got {type(self.granularity)}")
+        elif not self.granularity or any(size <= 0 for size in self.granularity):
+            raise ValueError(f"Each dim of a quantization block must be positive, got {self.granularity}")
+
+
+@torch_add_safe_global
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MXQuantConfig(MXFormat):
+    """
+    Conversion settings for an MX format.
+
+    The format fields are inherited from :class:`MXFormat`.
+
+    Attributes:
+        elem_dtype_max: Reference maximum used when calculating scales. A ``float`` for floating-point
+            dtypes and an ``int`` for integer dtypes. Defaults to ``None``, in which case it is derived
+            from ``elem_dtype``.
+
+        rounding_mode: Rounding mode used when casting high-precision values to ``elem_dtype``. See
+            ``QuantizationRoundingMode`` for the available modes. Defaults to ``QuantizationRoundingMode.RNE``.
+
+        scale_mode: Method used to calculate the per-block scale. See ``MXScaleCalculationMode`` for the
+            available methods. Defaults to ``MXScaleCalculationMode.RCEIL``.
+
+    """
+
+    elem_dtype_max: Final[float | int | None] = None
+
+    rounding_mode: Final[QuantizationRoundingMode] = QuantizationRoundingMode.RNE
+
+    scale_mode: Final[MXScaleCalculationMode] = MXScaleCalculationMode.RCEIL
+
+    def __post_init__(self) -> None:
+        """Validate the conversion settings and derive ``elem_dtype_max`` if unset."""
+        # Not super(): a zero-arg super here leaves the generated frozen __setattr__ bound to the
+        # pre-clone class, so assignment raises TypeError instead of FrozenInstanceError.
+        MXFormat.__post_init__(self)
 
         if not isinstance(self.rounding_mode, QuantizationRoundingMode):
             raise ValueError(f"rounding_mode must be a QuantizationRoundingMode, got {type(self.rounding_mode)}")
@@ -107,16 +138,8 @@ class MXFormat(MokitConfigBase):
         elif self.elem_dtype_max <= 0:
             raise ValueError(f"elem_dtype_max must be positive, got {self.elem_dtype_max}")
 
-        if self.scale_dtype is not MX_SCALE_DTYPE:
-            raise ValueError(f"The scale dtype is fixed at E8M0 by the MX spec, got {self.scale_dtype}")
-
         if not isinstance(self.scale_mode, MXScaleCalculationMode):
             raise ValueError(f"scale_mode must be a MXScaleCalculationMode, got {type(self.scale_mode)}")
-
-        if not isinstance(self.granularity, PerBlock):
-            raise ValueError(f"MXFormat.granularity must be of type PerBlock, got {type(self.granularity)}")
-        elif not self.granularity or any(size <= 0 for size in self.granularity):
-            raise ValueError(f"Each dim of a quantization block must be positive, got {self.granularity}")
 
 
 BLOCK_MX_DEFAULT_GRANULARITY: Final[PerBlock] = PerBlock(MX_DEFAULT_BLOCK_SIZE, MX_DEFAULT_BLOCK_SIZE)
@@ -142,5 +165,31 @@ class BlockMXFormat(MXFormat):
         # pre-clone class, so assignment raises TypeError instead of FrozenInstanceError.
         MXFormat.__post_init__(self)
 
-        if len(self.granularity) != 2 or self.granularity[0] != self.granularity[1]:
-            raise ValueError(f"BlockMXFormat only supports a square quantization block, got {self.granularity}")
+        _validate_square_block(self.granularity)
+
+
+def _validate_square_block(granularity: PerBlock) -> None:
+    """Validate that a granularity is a two-dimensional square block."""
+    if len(granularity) != 2 or granularity[0] != granularity[1]:
+        raise ValueError(f"BlockMXFormat only supports a square quantization block, got {granularity}")
+
+
+@torch_add_safe_global
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BlockMXQuantConfig(BlockMXFormat, MXQuantConfig):
+    """
+    Conversion settings for an MX format with square, two-dimensional blocks.
+
+    Combines the square-block constraint from :class:`BlockMXFormat` with the conversion
+    settings from :class:`MXQuantConfig`. The default block size comes from
+    :class:`BlockMXFormat`.
+    """
+
+    def __post_init__(self) -> None:
+        """Validate the conversion settings and the square block constraint."""
+        # BlockMXFormat is first in the MRO so its BLOCK_MX_DEFAULT_GRANULARITY default wins,
+        # but its __post_init__ would skip MXQuantConfig's checks. Validate the conversion
+        # settings once, then validate the block shape.
+        MXQuantConfig.__post_init__(self)
+
+        _validate_square_block(self.granularity)

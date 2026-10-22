@@ -11,18 +11,23 @@ import pytest
 import torch
 
 from mokit.quantization.formats import (
+    BlockMXFormat,
+    BlockMXQuantConfig,
     MXFormat,
+    MXQuantConfig,
     MXScaleCalculationMode,
     PerBlock,
     PerTensor,
     QuantizationRoundingMode,
 )
-from mokit.quantization.formats.mx_formats import BlockMXFormat
 
 MX_FORMAT_CLASSES: list[type[MXFormat]] = [MXFormat, BlockMXFormat]
+MX_QUANT_CONFIG_CLASSES: list[type[MXQuantConfig]] = [MXQuantConfig, BlockMXQuantConfig]
+ALL_MX_CLASSES: list[type[MXFormat]] = [*MX_FORMAT_CLASSES, *MX_QUANT_CONFIG_CLASSES]
+BLOCK_MX_CLASSES: list[type[BlockMXFormat]] = [BlockMXFormat, BlockMXQuantConfig]
 
 
-@pytest.mark.parametrize("cls", MX_FORMAT_CLASSES)
+@pytest.mark.parametrize("cls", MX_QUANT_CONFIG_CLASSES)
 @pytest.mark.parametrize(
     ("dtype", "expected_max"),
     [
@@ -33,60 +38,60 @@ MX_FORMAT_CLASSES: list[type[MXFormat]] = [MXFormat, BlockMXFormat]
         (torch.int8, 127.0),
     ],
 )
-def test_elem_dtype_max_is_derived(cls: type[MXFormat], dtype: torch.dtype, expected_max: float) -> None:
+def test_elem_dtype_max_is_derived(cls: type[MXQuantConfig], dtype: torch.dtype, expected_max: float) -> None:
     """Test that elem_dtype_max is derived from elem_dtype when unset."""
     assert cls(elem_dtype=dtype).elem_dtype_max == expected_max
 
 
-@pytest.mark.parametrize("cls", MX_FORMAT_CLASSES)
-def test_explicit_elem_dtype_max(cls: type[MXFormat]) -> None:
+@pytest.mark.parametrize("cls", MX_QUANT_CONFIG_CLASSES)
+def test_explicit_elem_dtype_max(cls: type[MXQuantConfig]) -> None:
     """Test that an explicit elem_dtype_max overrides the derived value."""
     assert cls(elem_dtype_max=100.0).elem_dtype_max == 100.0
 
 
-@pytest.mark.parametrize("cls", MX_FORMAT_CLASSES)
-def test_elem_dtype_max_must_be_positive(cls: type[MXFormat]) -> None:
+@pytest.mark.parametrize("cls", MX_QUANT_CONFIG_CLASSES)
+def test_elem_dtype_max_must_be_positive(cls: type[MXQuantConfig]) -> None:
     """Test that a non-positive elem_dtype_max is rejected."""
     with pytest.raises(ValueError, match="positive"):
         cls(elem_dtype_max=0.0)
 
 
-@pytest.mark.parametrize("cls", MX_FORMAT_CLASSES)
+@pytest.mark.parametrize("cls", ALL_MX_CLASSES)
 def test_unsupported_elem_dtype(cls: type[MXFormat]) -> None:
     """Test that an unsupported element dtype is rejected."""
     with pytest.raises(ValueError, match="Supported element dtypes"):
         cls(elem_dtype=torch.float16)
 
 
-@pytest.mark.parametrize("cls", MX_FORMAT_CLASSES)
-def test_invalid_rounding_mode(cls: type[MXFormat]) -> None:
+@pytest.mark.parametrize("cls", MX_QUANT_CONFIG_CLASSES)
+def test_invalid_rounding_mode(cls: type[MXQuantConfig]) -> None:
     """Test that a non-QuantizationRoundingMode round mode is rejected."""
     with pytest.raises(ValueError, match="rounding_mode"):
         cls(rounding_mode=cast(QuantizationRoundingMode, "rne"))
 
 
-@pytest.mark.parametrize("cls", MX_FORMAT_CLASSES)
+@pytest.mark.parametrize("cls", ALL_MX_CLASSES)
 def test_scale_dtype_is_fixed(cls: type[MXFormat]) -> None:
     """Test that a scale dtype other than E8M0 is rejected."""
     with pytest.raises(ValueError, match="fixed at E8M0"):
         cls(scale_dtype=torch.float32)
 
 
-@pytest.mark.parametrize("cls", MX_FORMAT_CLASSES)
-def test_invalid_scale_mode(cls: type[MXFormat]) -> None:
+@pytest.mark.parametrize("cls", MX_QUANT_CONFIG_CLASSES)
+def test_invalid_scale_mode(cls: type[MXQuantConfig]) -> None:
     """Test that a non-MXScaleCalculationMode scale mode is rejected."""
     with pytest.raises(ValueError, match="scale_mode"):
         cls(scale_mode=cast(MXScaleCalculationMode, "rceil"))
 
 
-@pytest.mark.parametrize("cls", MX_FORMAT_CLASSES)
+@pytest.mark.parametrize("cls", ALL_MX_CLASSES)
 def test_granularity_must_be_per_block(cls: type[MXFormat]) -> None:
     """Test that a granularity other than PerBlock is rejected."""
     with pytest.raises(ValueError, match="must be of type PerBlock"):
         cls(granularity=cast(PerBlock, PerTensor()))
 
 
-@pytest.mark.parametrize("cls", MX_FORMAT_CLASSES)
+@pytest.mark.parametrize("cls", ALL_MX_CLASSES)
 @pytest.mark.parametrize("block_size", [(0,), (-1,), (), (32, 0)])
 def test_granularity_sizes_must_be_positive(cls: type[MXFormat], block_size: tuple[int, ...]) -> None:
     """Test that block sizes must be non-empty and positive."""
@@ -96,34 +101,42 @@ def test_granularity_sizes_must_be_positive(cls: type[MXFormat], block_size: tup
 
 @pytest.mark.parametrize(
     ("cls", "granularity"),
-    [(MXFormat, PerBlock(10)), (BlockMXFormat, PerBlock(10, 10))],
-    ids=["MXFormat", "BlockMXFormat"],
+    [
+        (MXFormat, PerBlock(10)),
+        (MXQuantConfig, PerBlock(10)),
+        (BlockMXFormat, PerBlock(10, 10)),
+        (BlockMXQuantConfig, PerBlock(10, 10)),
+    ],
+    ids=["MXFormat", "MXQuantConfig", "BlockMXFormat", "BlockMXQuantConfig"],
 )
 def test_granularity_is_hardware_agnostic(cls: type[MXFormat], granularity: PerBlock) -> None:
     """Test that block sizes need not be multiples of the default block size."""
     assert cls(granularity=granularity).granularity == granularity
 
 
-def test_block_mx_format_defaults_to_a_square_block() -> None:
-    """Test that BlockMXFormat defaults to a two-dimensional square block."""
-    assert BlockMXFormat().granularity == PerBlock(32, 32)
+@pytest.mark.parametrize("cls", BLOCK_MX_CLASSES)
+def test_block_defaults_to_a_square_block(cls: type[BlockMXFormat]) -> None:
+    """Test that block formats default to a two-dimensional square block."""
+    assert cls().granularity == PerBlock(32, 32)
 
 
+@pytest.mark.parametrize("cls", BLOCK_MX_CLASSES)
 @pytest.mark.parametrize("block_size", [(32,), (32, 64), (32, 32, 32)])
-def test_block_mx_format_requires_a_square_block(block_size: tuple[int, ...]) -> None:
-    """Test that BlockMXFormat rejects blocks that are not two-dimensional squares."""
+def test_block_requires_a_square_block(cls: type[BlockMXFormat], block_size: tuple[int, ...]) -> None:
+    """Test that block formats reject blocks that are not two-dimensional squares."""
     with pytest.raises(ValueError, match="square quantization block"):
-        BlockMXFormat(granularity=PerBlock(*block_size))
+        cls(granularity=PerBlock(*block_size))
 
 
-def test_block_mx_format_accepts_a_square_block() -> None:
-    """Test that BlockMXFormat accepts a two-dimensional square block."""
-    assert BlockMXFormat(granularity=PerBlock(64, 64)).granularity == PerBlock(64, 64)
+@pytest.mark.parametrize("cls", BLOCK_MX_CLASSES)
+def test_block_accepts_a_square_block(cls: type[BlockMXFormat]) -> None:
+    """Test that block formats accept a two-dimensional square block."""
+    assert cls(granularity=PerBlock(64, 64)).granularity == PerBlock(64, 64)
 
 
-@pytest.mark.parametrize("cls", [MXFormat, BlockMXFormat])
+@pytest.mark.parametrize("cls", ALL_MX_CLASSES)
 def test_is_a_frozen_slotted_dataclass(cls: type) -> None:
-    """Test that MXFormat and BlockMXFormat are frozen, slotted dataclasses."""
+    """Test that every MX class is a frozen, slotted dataclass."""
     assert dataclasses.is_dataclass(cls)
     assert not hasattr(cls(), "__dict__")
     attribute = "attribute"
@@ -131,15 +144,22 @@ def test_is_a_frozen_slotted_dataclass(cls: type) -> None:
         setattr(cls(), attribute, 1)
 
 
-@pytest.mark.parametrize("cls", [MXScaleCalculationMode, MXFormat, BlockMXFormat])
+@pytest.mark.parametrize("cls", [MXScaleCalculationMode, *ALL_MX_CLASSES])
 def test_class_is_registered_as_safe_global(cls: type) -> None:
-    """Test that every serializable MX format class is registered for weights-only loading."""
+    """Test that every serializable MX class is registered for weights-only loading."""
     assert cls in torch.serialization.get_safe_globals(), f"{cls.__name__} is not registered as a safe global"
 
 
 @pytest.mark.parametrize(
     "mx_format",
-    [MXFormat(), MXFormat(granularity=PerBlock(64, 64)), BlockMXFormat()],
+    [
+        MXFormat(),
+        MXFormat(granularity=PerBlock(64, 64)),
+        BlockMXFormat(),
+        MXQuantConfig(),
+        MXQuantConfig(granularity=PerBlock(64, 64)),
+        BlockMXQuantConfig(),
+    ],
 )
 def test_ser_des_round_trips(mx_format: MXFormat, tmp_path: Path) -> None:
     """Test that MX formats survive a weights-only round trip."""

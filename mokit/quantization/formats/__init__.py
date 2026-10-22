@@ -148,15 +148,19 @@ class PerBlock(Granularity):
 from mokit.quantization.formats.float_formats import FloatFormat  # noqa: E402
 from mokit.quantization.formats.mx_formats import (  # noqa: E402
     BlockMXFormat,
+    BlockMXQuantConfig,
     MXFormat,
+    MXQuantConfig,
     MXScaleCalculationMode,
 )
 
 __all__ = [
     "BlockMXFormat",
+    "BlockMXQuantConfig",
     "FloatFormat",
     "Granularity",
     "MXFormat",
+    "MXQuantConfig",
     "MXScaleCalculationMode",
     "PerBlock",
     "PerDim",
