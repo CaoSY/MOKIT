@@ -239,3 +239,41 @@ class MokitWrapperTensorBase(MokitTensorBase):
                 f"{cls.__name__} must define inner_tensor_names and metadata_names to use "
                 "the inherited __tensor_unflatten__."
             )
+
+    def __repr__(self, *, tensor_contents: str | None = None) -> str:
+        """
+        Return a representation of the wrapper and its declared fields.
+
+        Args:
+            tensor_contents: Accepted for compatibility with ``torch.Tensor.__repr__``;
+                unused by this implementation.
+
+        Returns:
+            The wrapper representation.
+
+        Raises:
+            NotImplementedError: If the subclass has not defined ``inner_tensor_names``
+                and ``metadata_names``.
+
+        """
+        if hasattr(self, "inner_tensor_names") and hasattr(self, "metadata_names"):
+            fields = [
+                f"{name}={getattr(self, name)}"
+                for attr_name in ("inner_tensor_names", "metadata_names")
+                for name in getattr(self, attr_name)
+            ]
+            fields.extend(
+                f"{name}={getattr(self, name)}"
+                for attr_name in ("optional_inner_tensor_names", "optional_metadata_names")
+                if hasattr(self, attr_name)
+                for name in getattr(self, attr_name)
+                if hasattr(self, name)
+            )
+
+            return f"{type(self).__name__}({', '.join(fields)})"
+
+        else:
+            raise NotImplementedError(
+                f"{type(self).__name__} must define inner_tensor_names and metadata_names to use "
+                "the inherited __repr__."
+            )
