@@ -255,19 +255,65 @@ class MokitWrapperTensorBase(MokitTensorBase):
         """
         Return a representation of the wrapper and its declared fields.
 
+        Declared field values are formatted with ``repr``. Tensor attributes are printed
+        first; declared fields follow, skipping names already printed as tensor
+        attributes.
+
         Args:
-            tensor_contents: Accepted for compatibility with ``torch.Tensor.__repr__``;
-                unused by this implementation.
+            tensor_contents: Optional pre-rendered content string. If not ``None``, it is
+                placed first.
 
         Returns:
             The wrapper representation.
 
         """
-        fields = [
-            f"{name}={getattr(self, name)}"
+        fields = [tensor_contents] if tensor_contents is not None else []
+        printed_names: set[str] = set()
+
+        device = self.device
+        if (
+            device.type != torch.get_default_device().type
+            or (device.type == "cuda" and torch.cuda.current_device() != device.index)
+            or device.type == "mps"
+        ):
+            fields.append(f"device='{device}'")
+            printed_names.add("device")
+
+        default_complex_dtype = torch.cdouble if torch.get_default_dtype() == torch.double else torch.cfloat
+        if self.dtype not in (torch.get_default_dtype(), default_complex_dtype, torch.int64, torch.bool):
+            fields.append(f"dtype={self.dtype}")
+            printed_names.add("dtype")
+
+        if self.layout != torch.strided:
+            fields.append(f"layout={self.layout}")
+            printed_names.add("layout")
+
+        try:
+            grad_fn = self.grad_fn
+        except RuntimeError:
+            grad_fn_name: str | None = "Invalid"
+        else:
+            if grad_fn is None:
+                grad_fn_name = None
+            else:
+                grad_fn_name = type(grad_fn).__name__
+                if grad_fn_name == "CppFunction":
+                    grad_fn_name = grad_fn.name().rsplit("::", 1)[-1]
+
+        if grad_fn_name is not None:
+            fields.append(f"grad_fn=<{grad_fn_name}>")
+            printed_names.add("grad_fn")
+        elif self.requires_grad:
+            fields.append("requires_grad=True")
+            printed_names.add("requires_grad")
+
+        fields.extend(
+            f"{name}={getattr(self, name)!r}"
             for attr_name in MokitWrapperTensorBase._FLATTEN_ATTR_NAMES
             for name in getattr(self, attr_name)
-        ]
+            if name not in printed_names
+        )
+
         return f"{type(self).__name__}({', '.join(fields)})"
 
     @classmethod
