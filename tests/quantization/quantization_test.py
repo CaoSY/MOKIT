@@ -15,6 +15,10 @@ from mokit.quantization import (
     REDUCED_PRECISION_DTYPES,
 )
 
+# ==============================================================================
+# Dtype groups
+# ==============================================================================
+
 
 @pytest.mark.parametrize(
     "group",

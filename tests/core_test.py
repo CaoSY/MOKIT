@@ -12,6 +12,10 @@ import torch
 
 from mokit.core import MokitConfigBase, MokitWrapperTensorBase
 
+# ==============================================================================
+# MokitConfigBase
+# ==============================================================================
+
 
 def test_is_dataclass() -> None:
     """Test that MokitConfigBase is a dataclass."""
@@ -39,6 +43,15 @@ def test_equality() -> None:
 def test_is_hashable() -> None:
     """Test that instances of MokitConfigBase are hashable."""
     assert hash(MokitConfigBase()) == hash(MokitConfigBase())
+
+
+# ==============================================================================
+# MokitWrapperTensorBase
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# __repr__
+# ------------------------------------------------------------------------------
 
 
 class _Wrapper(MokitWrapperTensorBase):

@@ -24,6 +24,15 @@ from mokit.quantization.formats import (
 FLOAT_CLASSES: list[type[FloatFormat]] = [FloatFormat, FloatQuantConfig]
 
 
+# ==============================================================================
+# FloatFormat and FloatQuantConfig
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# __post_init__
+# ------------------------------------------------------------------------------
+
+
 @pytest.mark.parametrize("cls", FLOAT_CLASSES)
 def test_unsupported_elem_dtype(cls: type[FloatFormat]) -> None:
     """Test that an element dtype outside the reduced precision group is rejected."""
@@ -61,6 +70,11 @@ def test_accepts_any_granularity(cls: type[FloatFormat], granularity: Granularit
     assert cls(granularity=granularity).granularity == granularity
 
 
+# ------------------------------------------------------------------------------
+# Class-level
+# ------------------------------------------------------------------------------
+
+
 @pytest.mark.parametrize("cls", FLOAT_CLASSES)
 def test_is_a_frozen_slotted_dataclass(cls: type) -> None:
     """Test that float format classes are frozen, slotted dataclasses."""
@@ -71,10 +85,24 @@ def test_is_a_frozen_slotted_dataclass(cls: type) -> None:
         setattr(cls(), attribute, 1)
 
 
+# ==============================================================================
+# Serialization
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Safe-global registration
+# ------------------------------------------------------------------------------
+
+
 @pytest.mark.parametrize("cls", FLOAT_CLASSES)
 def test_class_is_registered_as_safe_global(cls: type) -> None:
     """Test that every serializable float format class is registered for weights-only loading."""
     assert cls in torch.serialization.get_safe_globals(), f"{cls.__name__} is not registered as a safe global"
+
+
+# ------------------------------------------------------------------------------
+# Weights-only round trip
+# ------------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(

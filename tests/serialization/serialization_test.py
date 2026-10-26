@@ -11,6 +11,14 @@ import torch
 
 from mokit.serialization import torch_add_safe_global
 
+# ==============================================================================
+# torch_add_safe_global
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------------------
+
 
 @torch_add_safe_global
 class Registered:
@@ -35,6 +43,11 @@ def _round_trip(obj: object, path: Path) -> object:
     return torch.load(path, weights_only=True)
 
 
+# ------------------------------------------------------------------------------
+# Decorator
+# ------------------------------------------------------------------------------
+
+
 def test_decorator_returns_the_class() -> None:
     """Test that the decorator returns the decorated class unchanged."""
 
@@ -43,6 +56,11 @@ def test_decorator_returns_the_class() -> None:
         """A decorated class."""
 
     assert Decorated.__name__ == "Decorated"
+
+
+# ------------------------------------------------------------------------------
+# Round trip
+# ------------------------------------------------------------------------------
 
 
 def test_registered_instance_round_trips(tmp_path: Path) -> None:
