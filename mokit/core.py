@@ -443,11 +443,8 @@ class MokitWrapperTensorBase(MokitTensorBase):
         if found:
             return result
 
-        if kwargs is None:
-            kwargs = {}
-
         arg_types = tuple(type(arg) for arg in args)
-        kwarg_types = {param: type(arg) for param, arg in kwargs.items()}
+        kwarg_types = {param: type(arg) for param, arg in kwargs.items()} if kwargs is not None else None
         raise NotImplementedError(
             f"{cls.__name__} dispatch: attempting to run unimplemented operator/function: "
             f"{func=}, {types=}, {arg_types=}, {kwarg_types=}"

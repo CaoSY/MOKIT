@@ -991,12 +991,12 @@ def test_torch_dispatch_handler_receives_none_kwargs() -> None:
     assert handler.calls[0][4] is None
 
 
-def test_torch_dispatch_root_normalizes_none_kwargs(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Test that the root dispatcher normalizes kwargs=None before raising."""
+def test_torch_dispatch_root_preserves_none_kwargs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that the root dispatcher preserves kwargs=None in the error message."""
     monkeypatch.setattr(MokitWrapperTensorBase, "_ATEN_OP_TABLE", {})
     sub = _new_dispatch_subclass("RootNoneKwargs")
     wrapper = sub(torch.tensor([1.0]))
-    with pytest.raises(NotImplementedError, match=r"kwarg_types=\{\}"):
+    with pytest.raises(NotImplementedError, match=r"kwarg_types=None"):
         sub.__torch_dispatch__(torch.ops.aten.neg.default, (sub,), (wrapper,), None)
 
 
