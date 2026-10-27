@@ -5,10 +5,11 @@
 
 import dataclasses
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, ClassVar, cast
 
 import pytest
 import torch
+from torch._ops import OpOverload
 
 from mokit.core import MokitConfigBase, MokitWrapperTensorBase
 
@@ -259,3 +260,1177 @@ def test_repr_filters_previously_printed_field_names() -> None:
 def test_repr_empty_wrapper() -> None:
     """Test that a wrapper with no fields prints empty parentheses."""
     assert repr(_EmptyWrapper()) == "_EmptyWrapper()"
+
+
+# ------------------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------------------
+
+
+class _DispatchWrapper(MokitWrapperTensorBase):
+    """A minimal wrapper used to exercise __torch_dispatch__."""
+
+    inner_tensor_names = ("payload",)
+
+    def __new__(cls, inner: torch.Tensor) -> torch.Tensor:
+        """Create the wrapper tensor."""
+        return torch.Tensor._make_wrapper_subclass(
+            cls, inner.shape, inner.stride(), dtype=inner.dtype, device=inner.device
+        )
+
+    def __init__(self, inner: torch.Tensor) -> None:
+        """Store the inner tensor."""
+        self.payload = inner
+
+
+def _new_dispatch_subclass(
+    name: str,
+    base: type[MokitWrapperTensorBase] = _DispatchWrapper,
+) -> type[MokitWrapperTensorBase]:
+    """Create a fresh wrapper subclass so tests do not share dispatch state."""
+    return cast(type[MokitWrapperTensorBase], type(name, (base,), {}))
+
+
+def _assert_no_dispatch_state(cls: type[MokitWrapperTensorBase]) -> None:
+    """Assert that a class has no own dispatch method or handler table."""
+    assert "__torch_dispatch__" not in cls.__dict__
+    assert "_ATEN_OP_TABLE" not in cls.__dict__
+
+
+class _RejectMethodMeta(type(MokitWrapperTensorBase)):
+    """A metaclass that rejects __torch_dispatch__ assignment."""
+
+    def __setattr__(cls, name: str, value: Any) -> None:
+        """Reject the generated dispatch method."""
+        if name == "__torch_dispatch__":
+            raise RuntimeError("method installation rejected")
+        super().__setattr__(name, value)
+
+
+class _RejectTableMeta(type(MokitWrapperTensorBase)):
+    """A metaclass that rejects _ATEN_OP_TABLE assignment."""
+
+    def __setattr__(cls, name: str, value: Any) -> None:
+        """Reject the generated table."""
+        if name == "_ATEN_OP_TABLE":
+            raise RuntimeError("table installation rejected")
+        super().__setattr__(name, value)
+
+
+class _RecordingHandler:
+    """A dispatch handler that records calls and returns a filled tensor."""
+
+    def __init__(self, value: float) -> None:
+        """Store the fill value and initialize the call log."""
+        self.value = value
+        self.calls: list[tuple[Any, ...]] = []
+
+    def __call__(
+        self,
+        cls: type[MokitWrapperTensorBase],
+        func: OpOverload,
+        types: tuple[type[Any], ...],
+        args: tuple[Any, ...] = (),
+        kwargs: dict[str, Any] | None = None,
+    ) -> torch.Tensor:
+        """Record the call and return a tensor filled with value."""
+        self.calls.append((cls, func, types, args, kwargs))
+        first = args[0]
+        payload = first.payload if isinstance(first, _DispatchWrapper) else first
+        return torch.full_like(payload, self.value)
+
+
+# ------------------------------------------------------------------------------
+# implements
+# ------------------------------------------------------------------------------
+
+
+def test_implements_returns_a_side_effect_free_decorator() -> None:
+    """Test that the factory validates without mutating the class until applied."""
+    sub = _new_dispatch_subclass("DecoratorTarget")
+    handler = _RecordingHandler(1.0)
+    decorator = sub.implements(torch.ops.aten.neg.default)
+    assert "__torch_dispatch__" not in sub.__dict__
+    assert "_ATEN_OP_TABLE" not in sub.__dict__
+    assert decorator(handler) is handler
+    assert isinstance(sub.__dict__["__torch_dispatch__"], classmethod)
+    assert {torch.ops.aten.neg.default: handler} == sub._ATEN_OP_TABLE
+
+
+def test_implements_rejects_non_bool_override() -> None:
+    """Test that override must be a bool and validation leaves the class unchanged."""
+    sub = _new_dispatch_subclass("InvalidOverride")
+    with pytest.raises(TypeError, match="override"):
+        sub.implements(torch.ops.aten.neg.default, override=cast(Any, 1))
+    _assert_no_dispatch_state(sub)
+
+
+def test_implements_rejects_op_overload_packet() -> None:
+    """Test that an OpOverloadPacket is rejected without mutating the class."""
+    sub = _new_dispatch_subclass("PacketKey")
+    with pytest.raises(TypeError, match="OpOverload"):
+        sub.implements(cast(Any, torch.ops.aten.neg))
+    _assert_no_dispatch_state(sub)
+
+
+def test_implements_rejects_non_op_overload() -> None:
+    """Test that a plain callable is rejected without mutating the class."""
+    sub = _new_dispatch_subclass("NonOpKey")
+    with pytest.raises(TypeError, match="OpOverload"):
+        sub.implements(cast(Any, torch.neg))
+    _assert_no_dispatch_state(sub)
+
+
+def test_implements_rejects_duplicate_keys() -> None:
+    """Test that duplicate operators are rejected without mutating the class."""
+    sub = _new_dispatch_subclass("DuplicateKeys")
+    op = torch.ops.aten.neg.default
+    with pytest.raises(KeyError, match="unique"):
+        sub.implements(op, op)
+    _assert_no_dispatch_state(sub)
+
+
+def test_implements_rejects_non_callable_handler() -> None:
+    """Test that a non-callable handler leaves the class unchanged."""
+    sub = _new_dispatch_subclass("NonCallable")
+    with pytest.raises(TypeError, match="callable"):
+        sub.implements(torch.ops.aten.neg.default)(cast(Any, 42))
+    _assert_no_dispatch_state(sub)
+
+
+def test_implements_installs_dispatch_method_and_table() -> None:
+    """Test that registration installs a classmethod and an own table."""
+    sub = _new_dispatch_subclass("Installs")
+    handler = _RecordingHandler(3.0)
+    op = torch.ops.aten.neg.default
+    sub.implements(op)(handler)
+    assert isinstance(sub.__dict__["__torch_dispatch__"], classmethod)
+    assert sub.__dict__["_ATEN_OP_TABLE"] == {op: handler}
+    inner = torch.tensor([1.0, 2.0])
+    assert torch.equal(op(sub(inner)), torch.full_like(inner, 3.0))
+
+
+def test_implements_registers_multiple_keys() -> None:
+    """Test that one decorator registers every provided operator."""
+    sub = _new_dispatch_subclass("MultipleKeys")
+    handler = _RecordingHandler(4.0)
+    neg = torch.ops.aten.neg.default
+    absolute = torch.ops.aten.abs.default
+    sub.implements(neg, absolute)(handler)
+    assert {neg: handler, absolute: handler} == sub._ATEN_OP_TABLE
+    inner = torch.tensor([-1.0, 2.0])
+    wrapper = sub(inner)
+    assert torch.equal(neg(wrapper), torch.full_like(inner, 4.0))
+    assert torch.equal(absolute(wrapper), torch.full_like(inner, 4.0))
+
+
+def test_implements_registers_wildcard() -> None:
+    """Test that an empty operator list registers the None wildcard."""
+    sub = _new_dispatch_subclass("Wildcard")
+    handler = _RecordingHandler(5.0)
+    sub.implements()(handler)
+    assert {None: handler} == sub._ATEN_OP_TABLE
+    inner = torch.tensor([1.0, 2.0])
+    assert torch.equal(torch.ops.aten.neg.default(sub(inner)), torch.full_like(inner, 5.0))
+
+
+def test_implements_rejects_conflicting_key_without_override() -> None:
+    """Test that a conflict raises and leaves the original handler in place."""
+    sub = _new_dispatch_subclass("Conflict")
+    first = _RecordingHandler(1.0)
+    second = _RecordingHandler(2.0)
+    op = torch.ops.aten.neg.default
+    sub.implements(op)(first)
+    table = sub._ATEN_OP_TABLE
+    snapshot = dict(table)
+    with pytest.raises(KeyError, match="already registered"):
+        sub.implements(op)(second)
+    assert sub._ATEN_OP_TABLE is table
+    assert dict(sub._ATEN_OP_TABLE) == snapshot
+    assert {op: first} == sub._ATEN_OP_TABLE
+    inner = torch.tensor([1.0])
+    assert torch.equal(op(sub(inner)), torch.full_like(inner, 1.0))
+
+
+def test_implements_override_replaces_handler() -> None:
+    """Test that override=True replaces an existing handler in place."""
+    sub = _new_dispatch_subclass("Override")
+    first = _RecordingHandler(1.0)
+    second = _RecordingHandler(2.0)
+    op = torch.ops.aten.neg.default
+    sub.implements(op)(first)
+    table = sub._ATEN_OP_TABLE
+    sub.implements(op, override=True)(second)
+    assert sub._ATEN_OP_TABLE is table
+    assert {op: second} == sub._ATEN_OP_TABLE
+    inner = torch.tensor([1.0])
+    assert torch.equal(op(sub(inner)), torch.full_like(inner, 2.0))
+
+
+def test_implements_requires_own_table_for_custom_dispatch_method() -> None:
+    """Test that a custom dispatch method without an own table is rejected."""
+
+    class Custom(MokitWrapperTensorBase):
+        """A wrapper with a custom dispatch method and no table."""
+
+        @classmethod
+        def __torch_dispatch__(
+            cls,
+            func: OpOverload,
+            types: tuple[type[Any], ...],
+            args: tuple[Any, ...] = (),
+            kwargs: dict[str, Any] | None = None,
+        ) -> Any:
+            """Return a sentinel."""
+            return None
+
+    original = Custom.__dict__["__torch_dispatch__"]
+    with pytest.raises(KeyError, match="_ATEN_OP_TABLE"):
+        Custom.implements(torch.ops.aten.neg.default)(_RecordingHandler(1.0))
+    assert Custom.__dict__["__torch_dispatch__"] is original
+    assert "_ATEN_OP_TABLE" not in Custom.__dict__
+
+
+def test_implements_rejects_non_dict_table() -> None:
+    """Test that a non-dict table is rejected without installing a method."""
+
+    class BadTable(MokitWrapperTensorBase):
+        """A wrapper with a non-dict dispatch table."""
+
+        _ATEN_OP_TABLE = cast(Any, [])
+
+    table = BadTable._ATEN_OP_TABLE
+    snapshot = list(table)
+    with pytest.raises(TypeError, match="must be a dict"):
+        BadTable.implements(torch.ops.aten.neg.default)(_RecordingHandler(1.0))
+    assert BadTable._ATEN_OP_TABLE is table
+    assert list(BadTable._ATEN_OP_TABLE) == snapshot
+    assert "__torch_dispatch__" not in BadTable.__dict__
+
+
+def test_implements_rejects_dict_subclass_table() -> None:
+    """Test that a dict subclass is rejected as a handler table."""
+
+    class DictTable(dict[Any, Any]):
+        """A dict subclass used as an invalid dispatch table."""
+
+    class Sub(MokitWrapperTensorBase):
+        """A wrapper with a dict-subclass dispatch table."""
+
+        _ATEN_OP_TABLE: ClassVar[dict[Any, Any]] = DictTable()
+
+    table = Sub._ATEN_OP_TABLE
+    snapshot = dict(table)
+    with pytest.raises(TypeError, match="must be a dict"):
+        Sub.implements(torch.ops.aten.neg.default)(_RecordingHandler(1.0))
+    assert Sub._ATEN_OP_TABLE is table
+    assert dict(Sub._ATEN_OP_TABLE) == snapshot
+    assert "__torch_dispatch__" not in Sub.__dict__
+
+
+def test_implements_keeps_custom_dispatch_method() -> None:
+    """Test that registration updates an own table without replacing a custom method."""
+
+    class CustomTable(MokitWrapperTensorBase):
+        """A wrapper with both a custom dispatch method and an own table."""
+
+        _ATEN_OP_TABLE: ClassVar[dict[Any, Any]] = {}
+
+        @classmethod
+        def __torch_dispatch__(
+            cls,
+            func: OpOverload,
+            types: tuple[type[Any], ...],
+            args: tuple[Any, ...] = (),
+            kwargs: dict[str, Any] | None = None,
+        ) -> Any:
+            """Return a sentinel."""
+            return None
+
+    original = CustomTable.__dict__["__torch_dispatch__"]
+    handler = _RecordingHandler(1.0)
+    CustomTable.implements(torch.ops.aten.neg.default)(handler)
+    assert CustomTable.__dict__["__torch_dispatch__"] is original
+    assert {torch.ops.aten.neg.default: handler} == CustomTable._ATEN_OP_TABLE
+
+
+def test_implements_installs_method_for_table_only_class() -> None:
+    """Test that a class with an own table and no method gets the generated method."""
+
+    class TableOnly(MokitWrapperTensorBase):
+        """A wrapper with an own dispatch table and no dispatch method."""
+
+        _ATEN_OP_TABLE: ClassVar[dict[Any, Any]] = {}
+
+    handler = _RecordingHandler(1.0)
+    TableOnly.implements(torch.ops.aten.neg.default)(handler)
+    assert isinstance(TableOnly.__dict__["__torch_dispatch__"], classmethod)
+    assert {torch.ops.aten.neg.default: handler} == TableOnly._ATEN_OP_TABLE
+
+
+def test_implements_table_only_conflict_keeps_method_uninstalled() -> None:
+    """Test that a table-only conflict raises before installing a method."""
+
+    class TableConflict(MokitWrapperTensorBase):
+        """A table-only wrapper with an existing handler."""
+
+        _ATEN_OP_TABLE: ClassVar[dict[Any, Any]] = {}
+
+    op = torch.ops.aten.neg.default
+    existing = _RecordingHandler(1.0)
+    candidate = _RecordingHandler(2.0)
+    TableConflict._ATEN_OP_TABLE[op] = existing
+    table = TableConflict._ATEN_OP_TABLE
+    snapshot = dict(table)
+    with pytest.raises(KeyError, match="already registered"):
+        TableConflict.implements(op)(candidate)
+    assert TableConflict._ATEN_OP_TABLE is table
+    assert dict(TableConflict._ATEN_OP_TABLE) == snapshot
+    assert {op: existing} == TableConflict._ATEN_OP_TABLE
+    assert "__torch_dispatch__" not in TableConflict.__dict__
+
+
+def test_implements_table_only_override_installs_method() -> None:
+    """Test that a table-only override installs a method and updates the table."""
+
+    class TableOverride(_DispatchWrapper):
+        """A table-only wrapper with an existing handler."""
+
+        _ATEN_OP_TABLE: ClassVar[dict[Any, Any]] = {}
+
+    op = torch.ops.aten.neg.default
+    first = _RecordingHandler(1.0)
+    second = _RecordingHandler(2.0)
+    TableOverride._ATEN_OP_TABLE[op] = first
+    table = TableOverride._ATEN_OP_TABLE
+    TableOverride.implements(op, override=True)(second)
+    assert isinstance(TableOverride.__dict__["__torch_dispatch__"], classmethod)
+    assert TableOverride._ATEN_OP_TABLE is table
+    assert {op: second} == TableOverride._ATEN_OP_TABLE
+    inner = torch.tensor([1.0])
+    assert torch.equal(op(TableOverride(inner)), torch.full_like(inner, 2.0))
+
+
+def test_implements_rejects_explicit_none() -> None:
+    """Test that an explicit None key is rejected without mutating the class."""
+    sub = _new_dispatch_subclass("ExplicitNone")
+    with pytest.raises(TypeError, match="OpOverload"):
+        sub.implements(cast(Any, None))
+    _assert_no_dispatch_state(sub)
+
+
+def test_implements_wildcard_conflict_and_override() -> None:
+    """Test wildcard conflict and override replacement."""
+    sub = _new_dispatch_subclass("WildcardOverride")
+    first = _RecordingHandler(1.0)
+    second = _RecordingHandler(2.0)
+    sub.implements()(first)
+    table = sub._ATEN_OP_TABLE
+    snapshot = dict(table)
+    with pytest.raises(KeyError, match="already registered"):
+        sub.implements()(second)
+    assert sub._ATEN_OP_TABLE is table
+    assert dict(sub._ATEN_OP_TABLE) == snapshot
+    assert {None: first} == sub._ATEN_OP_TABLE
+    sub.implements(override=True)(second)
+    assert sub._ATEN_OP_TABLE is table
+    assert {None: second} == sub._ATEN_OP_TABLE
+    inner = torch.tensor([1.0])
+    assert torch.equal(torch.ops.aten.neg.default(sub(inner)), torch.full_like(inner, 2.0))
+
+
+def test_implements_multi_key_conflict_leaves_class_unchanged() -> None:
+    """Test that a later key conflict prevents every key in the call from registering."""
+    sub = _new_dispatch_subclass("MultiKeyConflict")
+    first = _RecordingHandler(1.0)
+    second = _RecordingHandler(2.0)
+    neg = torch.ops.aten.neg.default
+    absolute = torch.ops.aten.abs.default
+    sub.implements(neg)(first)
+    with pytest.raises(KeyError, match="already registered"):
+        sub.implements(neg, absolute)(second)
+    assert {neg: first} == sub._ATEN_OP_TABLE
+    assert absolute not in sub._ATEN_OP_TABLE
+    inner = torch.tensor([1.0])
+    assert torch.equal(neg(sub(inner)), torch.full_like(inner, 1.0))
+
+
+def test_implements_installs_method_over_inherited_custom_dispatch() -> None:
+    """Test that registration installs a generated method over an inherited custom one."""
+
+    class CustomParent(_DispatchWrapper):
+        """A wrapper with a custom dispatch method."""
+
+        @classmethod
+        def __torch_dispatch__(
+            cls,
+            func: OpOverload,
+            types: tuple[type[Any], ...],
+            args: tuple[Any, ...] = (),
+            kwargs: dict[str, Any] | None = None,
+        ) -> Any:
+            """Return a sentinel."""
+            return None
+
+    class Child(CustomParent):
+        """A subclass that registers its first handler."""
+
+    parent_method = CustomParent.__dict__["__torch_dispatch__"]
+    handler = _RecordingHandler(3.0)
+    op = torch.ops.aten.neg.default
+    Child.implements(op)(handler)
+    assert isinstance(Child.__dict__["__torch_dispatch__"], classmethod)
+    assert Child.__dict__["__torch_dispatch__"] is not parent_method
+    assert {op: handler} == Child._ATEN_OP_TABLE
+    assert CustomParent.__dict__["__torch_dispatch__"] is parent_method
+    inner = torch.tensor([1.0])
+    assert torch.equal(op(Child(inner)), torch.full_like(inner, 3.0))
+
+
+def test_implements_child_owns_method_and_table() -> None:
+    """Test that a child registering handlers owns its method and table."""
+    parent = _new_dispatch_subclass("OwnParent")
+    child = _new_dispatch_subclass("OwnChild", parent)
+    parent_handler = _RecordingHandler(1.0)
+    child_handler = _RecordingHandler(2.0)
+    op = torch.ops.aten.neg.default
+    parent.implements(op)(parent_handler)
+    parent_method = parent.__dict__["__torch_dispatch__"]
+    child.implements(op)(child_handler)
+    assert "__torch_dispatch__" in child.__dict__
+    assert child.__dict__["__torch_dispatch__"] is not parent_method
+    assert {op: child_handler} == child._ATEN_OP_TABLE
+    assert {op: parent_handler} == parent._ATEN_OP_TABLE
+    assert parent.__dict__["__torch_dispatch__"] is parent_method
+    inner = torch.tensor([1.0])
+    assert torch.equal(op(parent(inner)), torch.full_like(inner, 1.0))
+    assert len(parent_handler.calls) == 1
+    assert child_handler.calls == []
+    assert torch.equal(op(child(inner)), torch.full_like(inner, 2.0))
+    assert len(parent_handler.calls) == 1
+    assert len(child_handler.calls) == 1
+
+
+def test_implements_method_install_failure_is_raised() -> None:
+    """Test that a fatal method-install failure propagates without being swallowed."""
+
+    class FatalMethod(MokitWrapperTensorBase, metaclass=_RejectMethodMeta):
+        """A wrapper whose metaclass rejects method installation."""
+
+    with pytest.raises(RuntimeError, match="method installation rejected"):
+        FatalMethod.implements(torch.ops.aten.neg.default)(_RecordingHandler(1.0))
+    _assert_no_dispatch_state(FatalMethod)
+
+
+def test_implements_method_install_failure_preserves_existing_table() -> None:
+    """Test that a method-install failure leaves an existing table unchanged."""
+
+    class FatalMethod(MokitWrapperTensorBase, metaclass=_RejectMethodMeta):
+        """A wrapper whose metaclass rejects method installation."""
+
+        _ATEN_OP_TABLE: ClassVar[dict[Any, Any]] = {}
+
+    table = FatalMethod._ATEN_OP_TABLE
+    snapshot = dict(table)
+    with pytest.raises(RuntimeError, match="method installation rejected"):
+        FatalMethod.implements(torch.ops.aten.neg.default)(_RecordingHandler(1.0))
+    assert FatalMethod.__dict__["_ATEN_OP_TABLE"] is table
+    assert dict(FatalMethod._ATEN_OP_TABLE) == snapshot
+    assert "__torch_dispatch__" not in FatalMethod.__dict__
+
+
+def test_implements_table_install_failure_is_raised() -> None:
+    """Test that a fatal table-install failure propagates and leaves the method installed."""
+
+    class FatalTable(MokitWrapperTensorBase, metaclass=_RejectTableMeta):
+        """A wrapper whose metaclass rejects table installation."""
+
+    with pytest.raises(RuntimeError, match="table installation rejected"):
+        FatalTable.implements(torch.ops.aten.neg.default)(_RecordingHandler(1.0))
+    assert "__torch_dispatch__" in FatalTable.__dict__
+    assert "_ATEN_OP_TABLE" not in FatalTable.__dict__
+
+
+# ------------------------------------------------------------------------------
+# __torch_dispatch__
+# ------------------------------------------------------------------------------
+
+
+def test_torch_dispatch_exact_handler_forwards_arguments() -> None:
+    """Test that an exact handler receives cls, func, types, args, and kwargs."""
+    sub = _new_dispatch_subclass("Exact")
+    handler = _RecordingHandler(2.0)
+    op = torch.ops.aten.neg.default
+    sub.implements(op)(handler)
+    inner = torch.tensor([1.0, 2.0])
+    wrapper = sub(inner)
+    result = op(wrapper)
+    assert torch.equal(result, torch.full_like(inner, 2.0))
+    assert len(handler.calls) == 1
+    cls, func, types, args, kwargs = handler.calls[0]
+    assert cls is sub
+    assert func is op
+    assert types == (sub,)
+    assert len(args) == 1 and args[0] is wrapper
+    assert kwargs == {}
+
+
+def test_torch_dispatch_wildcard_handler() -> None:
+    """Test that a wildcard handler receives operators with no exact handler."""
+    sub = _new_dispatch_subclass("WildcardDispatch")
+    handler = _RecordingHandler(3.0)
+    sub.implements()(handler)
+    inner = torch.tensor([1.0, 2.0])
+    wrapper = sub(inner)
+    result = torch.ops.aten.neg.default(wrapper)
+    assert torch.equal(result, torch.full_like(inner, 3.0))
+    cls, func, types, args, kwargs = handler.calls[0]
+    assert cls is sub
+    assert func is torch.ops.aten.neg.default
+    assert types == (sub,)
+    assert len(args) == 1 and args[0] is wrapper
+    assert kwargs == {}
+
+
+def test_torch_dispatch_exact_precedes_wildcard() -> None:
+    """Test that an exact handler wins over a wildcard on the same class."""
+    sub = _new_dispatch_subclass("ExactPrecedence")
+    exact = _RecordingHandler(1.0)
+    wildcard = _RecordingHandler(2.0)
+    op = torch.ops.aten.neg.default
+    sub.implements()(wildcard)
+    sub.implements(op)(exact)
+    inner = torch.tensor([1.0])
+    wrapper = sub(inner)
+    assert torch.equal(op(wrapper), torch.full_like(inner, 1.0))
+    assert len(exact.calls) == 1
+    assert wildcard.calls == []
+    assert torch.equal(torch.ops.aten.abs.default(wrapper), torch.full_like(inner, 2.0))
+    assert len(wildcard.calls) == 1
+
+
+def test_torch_dispatch_forwards_kwargs() -> None:
+    """Test that keyword arguments reach the handler."""
+    sub = _new_dispatch_subclass("Kwargs")
+    seen_kwargs: list[dict[str, Any] | None] = []
+
+    def handler(
+        cls: type[MokitWrapperTensorBase],
+        func: OpOverload,
+        types: tuple[type[Any], ...],
+        args: tuple[Any, ...] = (),
+        kwargs: dict[str, Any] | None = None,
+    ) -> torch.Tensor:
+        """Add the inner payloads using alpha from kwargs."""
+        seen_kwargs.append(kwargs)
+        left, right = args[:2]
+        alpha = (kwargs or {}).get("alpha", 1)
+        return torch.add(left.payload, right.payload, alpha=alpha)
+
+    sub.implements(torch.ops.aten.add.Tensor)(handler)
+    left = sub(torch.tensor([1.0, 2.0]))
+    right = sub(torch.tensor([3.0, 4.0]))
+    result = torch.ops.aten.add.Tensor(left, right, alpha=2)
+    assert torch.equal(result, torch.tensor([7.0, 10.0]))
+    assert seen_kwargs == [{"alpha": 2}]
+
+
+def test_torch_dispatch_inherits_parent_handler() -> None:
+    """Test that a grandchild uses an inherited handler and passes runtime cls."""
+    parent = _new_dispatch_subclass("Parent")
+    child = _new_dispatch_subclass("Child", parent)
+    grandchild = _new_dispatch_subclass("GrandChild", child)
+    handler = _RecordingHandler(1.0)
+    op = torch.ops.aten.neg.default
+    parent.implements(op)(handler)
+    inner = torch.tensor([1.0])
+    result = op(grandchild(inner))
+    assert torch.equal(result, torch.full_like(inner, 1.0))
+    assert handler.calls[0][0] is grandchild
+
+
+def test_torch_dispatch_child_handler_overrides_parent() -> None:
+    """Test that a child handler wins over a parent handler for the same key."""
+    parent = _new_dispatch_subclass("OverrideParent")
+    child = _new_dispatch_subclass("OverrideChild", parent)
+    parent_handler = _RecordingHandler(1.0)
+    child_handler = _RecordingHandler(2.0)
+    op = torch.ops.aten.neg.default
+    parent.implements(op)(parent_handler)
+    child.implements(op)(child_handler)
+    inner = torch.tensor([1.0])
+    result = op(child(inner))
+    assert torch.equal(result, torch.full_like(inner, 2.0))
+    assert parent_handler.calls == []
+    assert len(child_handler.calls) == 1
+
+
+def test_torch_dispatch_child_wildcard_shadows_parent_exact() -> None:
+    """Test that a child wildcard is consulted before a parent exact handler."""
+    parent = _new_dispatch_subclass("WildParent")
+    child = _new_dispatch_subclass("WildChild", parent)
+    parent_handler = _RecordingHandler(1.0)
+    child_handler = _RecordingHandler(2.0)
+    op = torch.ops.aten.neg.default
+    parent.implements(op)(parent_handler)
+    child.implements()(child_handler)
+    inner = torch.tensor([1.0])
+    result = op(child(inner))
+    assert torch.equal(result, torch.full_like(inner, 2.0))
+    assert parent_handler.calls == []
+    assert len(child_handler.calls) == 1
+
+
+def test_torch_dispatch_parent_exact_after_child_miss() -> None:
+    """Test that a parent exact handler runs after a child table miss."""
+    parent = _new_dispatch_subclass("ExactParent")
+    child = _new_dispatch_subclass("ExactChild", parent)
+    parent_handler = _RecordingHandler(1.0)
+    child_handler = _RecordingHandler(2.0)
+    neg = torch.ops.aten.neg.default
+    absolute = torch.ops.aten.abs.default
+    parent.implements(neg)(parent_handler)
+    child.implements(absolute)(child_handler)
+    inner = torch.tensor([1.0])
+    result = neg(child(inner))
+    assert torch.equal(result, torch.full_like(inner, 1.0))
+    assert len(parent_handler.calls) == 1
+    assert parent_handler.calls[0][0] is child
+    assert child_handler.calls == []
+
+
+def test_torch_dispatch_parent_wildcard_after_child_miss() -> None:
+    """Test that a parent wildcard runs after a child table miss."""
+    parent = _new_dispatch_subclass("WildcardParent")
+    child = _new_dispatch_subclass("WildcardChild", parent)
+    parent_handler = _RecordingHandler(1.0)
+    child_handler = _RecordingHandler(2.0)
+    neg = torch.ops.aten.neg.default
+    absolute = torch.ops.aten.abs.default
+    parent.implements()(parent_handler)
+    child.implements(absolute)(child_handler)
+    inner = torch.tensor([1.0])
+    result = neg(child(inner))
+    assert torch.equal(result, torch.full_like(inner, 1.0))
+    assert len(parent_handler.calls) == 1
+    assert parent_handler.calls[0][0] is child
+    assert child_handler.calls == []
+
+
+def test_torch_dispatch_same_key_super_composition() -> None:
+    """Test that a child handler can continue the MRO for the same key."""
+    parent = _new_dispatch_subclass("ComposeParent")
+    child = _new_dispatch_subclass("ComposeChild", parent)
+    order: list[str] = []
+    seen_cls: list[type[MokitWrapperTensorBase]] = []
+
+    def parent_handler(
+        cls: type[MokitWrapperTensorBase],
+        func: OpOverload,
+        types: tuple[type[Any], ...],
+        args: tuple[Any, ...] = (),
+        kwargs: dict[str, Any] | None = None,
+    ) -> torch.Tensor:
+        """Negate the payload."""
+        order.append("parent")
+        seen_cls.append(cls)
+        return torch.neg(args[0].payload)
+
+    def child_handler(
+        cls: type[MokitWrapperTensorBase],
+        func: OpOverload,
+        types: tuple[type[Any], ...],
+        args: tuple[Any, ...] = (),
+        kwargs: dict[str, Any] | None = None,
+    ) -> torch.Tensor:
+        """Delegate to the parent, then double the result."""
+        order.append("child")
+        result = super(child, cls).__torch_dispatch__(func, types, args, kwargs)  # pyrefly: ignore[invalid-argument]
+        return result * 2
+
+    op = torch.ops.aten.neg.default
+    parent.implements(op)(parent_handler)
+    child.implements(op)(child_handler)
+    inner = torch.tensor([1.0, 2.0])
+    result = op(child(inner))
+    assert torch.equal(result, torch.tensor([-2.0, -4.0]))
+    assert order == ["child", "parent"]
+    assert seen_cls == [child]
+
+
+def test_torch_dispatch_unhandled_operator_raises() -> None:
+    """Test that the root dispatcher raises for an unhandled operator."""
+    sub = _new_dispatch_subclass("Unhandled")
+    wrapper = sub(torch.tensor([1.0]))
+    with pytest.raises(NotImplementedError, match="Unhandled dispatch"):
+        torch.ops.aten.neg.default(wrapper)
+
+
+def test_torch_dispatch_root_table_handler(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that a handler registered on the root table is reached last."""
+    monkeypatch.setattr(MokitWrapperTensorBase, "_ATEN_OP_TABLE", {})
+    handler = _RecordingHandler(6.0)
+    op = torch.ops.aten.neg.default
+    MokitWrapperTensorBase.implements(op)(handler)
+    sub = _new_dispatch_subclass("RootTable")
+    inner = torch.tensor([1.0])
+    result = op(sub(inner))
+    assert torch.equal(result, torch.full_like(inner, 6.0))
+    assert handler.calls[0][0] is sub
+
+
+def test_torch_dispatch_handler_receives_none_kwargs() -> None:
+    """Test that the generated dispatcher forwards kwargs=None unchanged."""
+    sub = _new_dispatch_subclass("NoneKwargs")
+    handler = _RecordingHandler(4.0)
+    op = torch.ops.aten.neg.default
+    sub.implements(op)(handler)
+    inner = torch.tensor([1.0])
+    result = sub.__torch_dispatch__(op, (sub,), (sub(inner),), None)
+    assert torch.equal(result, torch.full_like(inner, 4.0))
+    assert handler.calls[0][4] is None
+
+
+def test_torch_dispatch_root_normalizes_none_kwargs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that the root dispatcher normalizes kwargs=None before raising."""
+    monkeypatch.setattr(MokitWrapperTensorBase, "_ATEN_OP_TABLE", {})
+    sub = _new_dispatch_subclass("RootNoneKwargs")
+    wrapper = sub(torch.tensor([1.0]))
+    with pytest.raises(NotImplementedError, match=r"kwarg_types=\{\}"):
+        sub.__torch_dispatch__(torch.ops.aten.neg.default, (sub,), (wrapper,), None)
+
+
+def test_torch_dispatch_root_wildcard_handler(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that a root wildcard handler is used as the final lookup."""
+    monkeypatch.setattr(MokitWrapperTensorBase, "_ATEN_OP_TABLE", {})
+    handler = _RecordingHandler(7.0)
+    op = torch.ops.aten.neg.default
+    MokitWrapperTensorBase.implements()(handler)
+    sub = _new_dispatch_subclass("RootWildcard")
+    inner = torch.tensor([1.0])
+    result = op(sub(inner))
+    assert torch.equal(result, torch.full_like(inner, 7.0))
+    assert handler.calls[0][0] is sub
+    assert handler.calls[0][1] is op
+
+
+def test_torch_dispatch_parent_handler_wins_over_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that a parent exact handler wins over a root exact handler."""
+    monkeypatch.setattr(MokitWrapperTensorBase, "_ATEN_OP_TABLE", {})
+    root_handler = _RecordingHandler(1.0)
+    op = torch.ops.aten.neg.default
+    MokitWrapperTensorBase.implements(op)(root_handler)
+    parent = _new_dispatch_subclass("RootVsParent")
+    child = _new_dispatch_subclass("RootVsParentChild", parent)
+    parent_handler = _RecordingHandler(2.0)
+    parent.implements(op)(parent_handler)
+    inner = torch.tensor([1.0])
+    result = op(child(inner))
+    assert torch.equal(result, torch.full_like(inner, 2.0))
+    assert root_handler.calls == []
+    assert parent_handler.calls[0][0] is child
+
+
+def test_torch_dispatch_parent_wildcard_wins_over_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that a parent wildcard wins over a root exact handler."""
+    monkeypatch.setattr(MokitWrapperTensorBase, "_ATEN_OP_TABLE", {})
+    root_handler = _RecordingHandler(1.0)
+    op = torch.ops.aten.neg.default
+    MokitWrapperTensorBase.implements(op)(root_handler)
+    parent = _new_dispatch_subclass("RootVsWildParent")
+    child = _new_dispatch_subclass("RootVsWildChild", parent)
+    parent_handler = _RecordingHandler(2.0)
+    parent.implements()(parent_handler)
+    inner = torch.tensor([1.0])
+    result = op(child(inner))
+    assert torch.equal(result, torch.full_like(inner, 2.0))
+    assert root_handler.calls == []
+    assert parent_handler.calls[0][0] is child
+
+
+def test_torch_dispatch_root_exact_precedes_root_wildcard(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that the root table checks its exact key before its wildcard."""
+    monkeypatch.setattr(MokitWrapperTensorBase, "_ATEN_OP_TABLE", {})
+    exact = _RecordingHandler(1.0)
+    wildcard = _RecordingHandler(2.0)
+    op = torch.ops.aten.neg.default
+    MokitWrapperTensorBase.implements(op)(exact)
+    MokitWrapperTensorBase.implements()(wildcard)
+    sub = _new_dispatch_subclass("RootPrecedence")
+    inner = torch.tensor([1.0])
+    result = op(sub(inner))
+    assert torch.equal(result, torch.full_like(inner, 1.0))
+    assert len(exact.calls) == 1
+    assert wildcard.calls == []
+
+
+def test_torch_dispatch_unhandled_error_reports_types(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that the unhandled error reports argument and keyword types."""
+    monkeypatch.setattr(MokitWrapperTensorBase, "_ATEN_OP_TABLE", {})
+    sub = _new_dispatch_subclass("ErrorDetails")
+    wrapper = sub(torch.tensor([1.0]))
+    with pytest.raises(NotImplementedError) as exc_info:
+        sub.__torch_dispatch__(torch.ops.aten.neg.default, (sub,), (wrapper,), {"alpha": 2})
+    message = str(exc_info.value)
+    assert "ErrorDetails dispatch" in message
+    assert "func=" in message
+    assert "types=" in message
+    assert "arg_types=" in message
+    assert "kwarg_types=" in message
+    assert "alpha" in message
+    assert "<class 'int'>" in message
+
+
+@pytest.mark.parametrize(
+    "result",
+    [pytest.param(NotImplemented, id="not-implemented"), pytest.param(None, id="none")],
+)
+def test_torch_dispatch_handler_result_is_returned(result: Any) -> None:
+    """Test that NotImplemented and None handler results are returned unchanged."""
+    sub = _new_dispatch_subclass("HandlerResult")
+    op = torch.ops.aten.neg.default
+
+    def handler(
+        cls: type[MokitWrapperTensorBase],
+        func: OpOverload,
+        types: tuple[type[Any], ...],
+        args: tuple[Any, ...] = (),
+        kwargs: dict[str, Any] | None = None,
+    ) -> Any:
+        """Return the parametrized result."""
+        return result
+
+    sub.implements(op)(handler)
+    wrapper = sub(torch.tensor([1.0]))
+    assert sub.__torch_dispatch__(op, (sub,), (wrapper,), None) is result
+
+
+def test_torch_dispatch_handler_exception_propagates() -> None:
+    """Test that a handler exception propagates out of the dispatcher."""
+    sub = _new_dispatch_subclass("HandlerError")
+    op = torch.ops.aten.neg.default
+
+    def handler(
+        cls: type[MokitWrapperTensorBase],
+        func: OpOverload,
+        types: tuple[type[Any], ...],
+        args: tuple[Any, ...] = (),
+        kwargs: dict[str, Any] | None = None,
+    ) -> Any:
+        """Raise an error."""
+        raise ValueError("handler failure")
+
+    sub.implements(op)(handler)
+    wrapper = sub(torch.tensor([1.0]))
+    with pytest.raises(ValueError, match="handler failure"):
+        torch.ops.aten.neg.default(wrapper)
+
+
+def test_torch_dispatch_handler_not_implemented_raises_outer_error() -> None:
+    """Test that PyTorch rejects a dispatcher that returns NotImplemented."""
+    sub = _new_dispatch_subclass("NotImplementedOuter")
+    op = torch.ops.aten.neg.default
+
+    def handler(
+        cls: type[MokitWrapperTensorBase],
+        func: OpOverload,
+        types: tuple[type[Any], ...],
+        args: tuple[Any, ...] = (),
+        kwargs: dict[str, Any] | None = None,
+    ) -> Any:
+        """Return NotImplemented."""
+        return NotImplemented
+
+    sub.implements(op)(handler)
+    wrapper = sub(torch.tensor([1.0]))
+    with pytest.raises(TypeError, match="Multiple dispatch failed"):
+        torch.ops.aten.neg.default(wrapper)
+
+
+def test_torch_dispatch_deep_super_composition() -> None:
+    """Test three-level same-key composition with a leaf runtime class."""
+    top = _new_dispatch_subclass("DeepTop")
+    middle = _new_dispatch_subclass("DeepMiddle", top)
+    bottom = _new_dispatch_subclass("DeepBottom", middle)
+    leaf = _new_dispatch_subclass("DeepLeaf", bottom)
+    order: list[str] = []
+    seen_cls: list[type[MokitWrapperTensorBase]] = []
+    seen_types: list[tuple[type[Any], ...]] = []
+
+    def top_handler(
+        cls: type[MokitWrapperTensorBase],
+        func: OpOverload,
+        types: tuple[type[Any], ...],
+        args: tuple[Any, ...] = (),
+        kwargs: dict[str, Any] | None = None,
+    ) -> torch.Tensor:
+        """Negate the payload."""
+        order.append("top")
+        seen_cls.append(cls)
+        seen_types.append(types)
+        return torch.neg(args[0].payload)
+
+    def middle_handler(
+        cls: type[MokitWrapperTensorBase],
+        func: OpOverload,
+        types: tuple[type[Any], ...],
+        args: tuple[Any, ...] = (),
+        kwargs: dict[str, Any] | None = None,
+    ) -> torch.Tensor:
+        """Delegate to the top handler and add ten."""
+        order.append("middle")
+        seen_cls.append(cls)
+        seen_types.append(types)
+        parent = super(middle, cls)  # pyrefly: ignore[invalid-argument]
+        return parent.__torch_dispatch__(func, types, args, kwargs) + 10
+
+    def bottom_handler(
+        cls: type[MokitWrapperTensorBase],
+        func: OpOverload,
+        types: tuple[type[Any], ...],
+        args: tuple[Any, ...] = (),
+        kwargs: dict[str, Any] | None = None,
+    ) -> torch.Tensor:
+        """Delegate to the middle handler and double the result."""
+        order.append("bottom")
+        seen_cls.append(cls)
+        seen_types.append(types)
+        parent = super(bottom, cls)  # pyrefly: ignore[invalid-argument]
+        return parent.__torch_dispatch__(func, types, args, kwargs) * 2
+
+    op = torch.ops.aten.neg.default
+    top.implements(op)(top_handler)
+    middle.implements(op)(middle_handler)
+    bottom.implements(op)(bottom_handler)
+    inner = torch.tensor([1.0, 2.0])
+    result = op(leaf(inner))
+    assert torch.equal(result, torch.tensor([18.0, 16.0]))
+    assert order == ["bottom", "middle", "top"]
+    assert seen_cls == [leaf, leaf, leaf]
+    assert seen_types == [(leaf,), (leaf,), (leaf,)]
+
+
+def test_torch_dispatch_child_wildcard_shadows_parent_wildcard() -> None:
+    """Test that a child wildcard wins over a parent wildcard."""
+    parent = _new_dispatch_subclass("BothWildParent")
+    child = _new_dispatch_subclass("BothWildChild", parent)
+    parent_handler = _RecordingHandler(1.0)
+    child_handler = _RecordingHandler(2.0)
+    parent.implements()(parent_handler)
+    child.implements()(child_handler)
+    inner = torch.tensor([1.0])
+    result = torch.ops.aten.neg.default(child(inner))
+    assert torch.equal(result, torch.full_like(inner, 2.0))
+    assert parent_handler.calls == []
+    assert len(child_handler.calls) == 1
+
+
+def test_torch_dispatch_super_relaunch_forwards_kwargs() -> None:
+    """Test that a child handler re-launches the MRO lookup and forwards kwargs."""
+    parent = _new_dispatch_subclass("KwargsComposeParent")
+    child = _new_dispatch_subclass("KwargsComposeChild", parent)
+    seen: list[dict[str, Any] | None] = []
+
+    def parent_handler(
+        cls: type[MokitWrapperTensorBase],
+        func: OpOverload,
+        types: tuple[type[Any], ...],
+        args: tuple[Any, ...] = (),
+        kwargs: dict[str, Any] | None = None,
+    ) -> torch.Tensor:
+        """Add the payloads using alpha from kwargs."""
+        seen.append(kwargs)
+        left, right = args[:2]
+        alpha = (kwargs or {}).get("alpha", 1)
+        return torch.add(left.payload, right.payload, alpha=alpha)
+
+    def child_handler(
+        cls: type[MokitWrapperTensorBase],
+        func: OpOverload,
+        types: tuple[type[Any], ...],
+        args: tuple[Any, ...] = (),
+        kwargs: dict[str, Any] | None = None,
+    ) -> torch.Tensor:
+        """Delegate to the parent handler."""
+        # Re-enter the generated dispatcher after Child in the runtime MRO.
+        parent_dispatch = super(child, cls)  # pyrefly: ignore[invalid-argument]
+        return parent_dispatch.__torch_dispatch__(func, types, args, kwargs)
+
+    op = torch.ops.aten.add.Tensor
+    parent.implements(op)(parent_handler)
+    child.implements(op)(child_handler)
+    left = child(torch.tensor([1.0, 2.0]))
+    right = child(torch.tensor([3.0, 4.0]))
+    result = op(left, right, alpha=2)
+    assert torch.equal(result, torch.tensor([7.0, 10.0]))
+    assert seen == [{"alpha": 2}]
+
+
+def test_torch_dispatch_super_reaches_custom_parent() -> None:
+    """Test that super composition can reach an inherited custom dispatcher."""
+    calls: list[str] = []
+
+    class CustomParent(_DispatchWrapper):
+        """A wrapper with a custom dispatch method."""
+
+        @classmethod
+        def __torch_dispatch__(
+            cls,
+            func: OpOverload,
+            types: tuple[type[Any], ...],
+            args: tuple[Any, ...] = (),
+            kwargs: dict[str, Any] | None = None,
+        ) -> torch.Tensor:
+            """Negate the payload."""
+            calls.append("parent")
+            return torch.neg(args[0].payload)
+
+    class CustomChild(CustomParent):
+        """A child that registers its own handler."""
+
+    def child_handler(
+        cls: type[MokitWrapperTensorBase],
+        func: OpOverload,
+        types: tuple[type[Any], ...],
+        args: tuple[Any, ...] = (),
+        kwargs: dict[str, Any] | None = None,
+    ) -> torch.Tensor:
+        """Delegate to the custom parent and double the result."""
+        parent = super(CustomChild, cls)  # pyrefly: ignore[invalid-super-call]
+        return parent.__torch_dispatch__(func, types, args, kwargs) * 2
+
+    op = torch.ops.aten.neg.default
+    CustomChild.implements(op)(child_handler)
+    inner = torch.tensor([1.0, 2.0])
+    result = op(CustomChild(inner))
+    assert torch.equal(result, torch.tensor([-2.0, -4.0]))
+    assert calls == ["parent"]
+
+
+def test_torch_dispatch_parent_handler_registered_after_child() -> None:
+    """Test that a parent handler added later is visible to child dispatch."""
+    parent = _new_dispatch_subclass("LateParent")
+    child = _new_dispatch_subclass("LateChild", parent)
+    child_handler = _RecordingHandler(1.0)
+    parent_handler = _RecordingHandler(2.0)
+    neg = torch.ops.aten.neg.default
+    absolute = torch.ops.aten.abs.default
+    child.implements(neg)(child_handler)
+    parent.implements(absolute)(parent_handler)
+    inner = torch.tensor([1.0])
+    result = absolute(child(inner))
+    assert torch.equal(result, torch.full_like(inner, 2.0))
+    assert parent_handler.calls[0][0] is child
+    assert child_handler.calls == []
+
+
+def test_torch_dispatch_super_reaches_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that super composition can reach the root table."""
+    monkeypatch.setattr(MokitWrapperTensorBase, "_ATEN_OP_TABLE", {})
+    root_handler = _RecordingHandler(1.0)
+    op = torch.ops.aten.neg.default
+    MokitWrapperTensorBase.implements(op)(root_handler)
+    sub = _new_dispatch_subclass("SuperToRoot")
+
+    def handler(
+        cls: type[MokitWrapperTensorBase],
+        func: OpOverload,
+        types: tuple[type[Any], ...],
+        args: tuple[Any, ...] = (),
+        kwargs: dict[str, Any] | None = None,
+    ) -> torch.Tensor:
+        """Delegate to the next dispatcher in the MRO."""
+        parent = super(sub, cls)  # pyrefly: ignore[invalid-argument]
+        return parent.__torch_dispatch__(func, types, args, kwargs)
+
+    sub.implements(op)(handler)
+    inner = torch.tensor([1.0])
+    result = op(sub(inner))
+    assert torch.equal(result, torch.full_like(inner, 1.0))
+    assert root_handler.calls[0][0] is sub
+
+
+def test_torch_dispatch_multiple_inheritance_uses_mro_order() -> None:
+    """Test dispatch order across two independent base classes."""
+    left = _new_dispatch_subclass("MroLeft")
+    right = _new_dispatch_subclass("MroRight")
+    combined = cast(type[MokitWrapperTensorBase], type("MroCombined", (left, right), {}))
+    left_handler = _RecordingHandler(1.0)
+    right_handler = _RecordingHandler(2.0)
+    neg = torch.ops.aten.neg.default
+    absolute = torch.ops.aten.abs.default
+    left.implements(neg)(left_handler)
+    right.implements(absolute)(right_handler)
+    inner = torch.tensor([-1.0])
+    wrapper = combined(inner)
+    assert torch.equal(neg(wrapper), torch.full_like(inner, 1.0))
+    assert left_handler.calls[0][0] is combined
+    assert right_handler.calls == []
+    assert torch.equal(absolute(wrapper), torch.full_like(inner, 2.0))
+    assert right_handler.calls[0][0] is combined
+    assert len(left_handler.calls) == 1
+
+
+def test_torch_dispatch_multiple_inheritance_wildcard_shadows_exact() -> None:
+    """Test that an earlier base wildcard shadows a later base exact handler."""
+    left = _new_dispatch_subclass("MroWildLeft")
+    right = _new_dispatch_subclass("MroWildRight")
+    combined = cast(type[MokitWrapperTensorBase], type("MroWildCombined", (left, right), {}))
+    left_handler = _RecordingHandler(1.0)
+    right_handler = _RecordingHandler(2.0)
+    op = torch.ops.aten.neg.default
+    left.implements()(left_handler)
+    right.implements(op)(right_handler)
+    inner = torch.tensor([1.0])
+    result = op(combined(inner))
+    assert torch.equal(result, torch.full_like(inner, 1.0))
+    assert left_handler.calls[0][0] is combined
+    assert right_handler.calls == []
+
+
+def test_torch_dispatch_multiple_inheritance_falls_back_to_second_base_wildcard() -> None:
+    """Test that dispatch reaches a wildcard on the second base after the first misses."""
+    left = _new_dispatch_subclass("MroExactLeft")
+    right = _new_dispatch_subclass("MroWildcardRight")
+    combined = cast(type[MokitWrapperTensorBase], type("MroExactWildCombined", (left, right), {}))
+    left_handler = _RecordingHandler(1.0)
+    right_handler = _RecordingHandler(2.0)
+    neg = torch.ops.aten.neg.default
+    absolute = torch.ops.aten.abs.default
+    left.implements(neg)(left_handler)
+    right.implements()(right_handler)
+    inner = torch.tensor([-1.0])
+    result = absolute(combined(inner))
+    assert torch.equal(result, torch.full_like(inner, 2.0))
+    assert left_handler.calls == []
+    assert right_handler.calls[0][0] is combined
+
+
+def test_torch_dispatch_forwards_mixed_types() -> None:
+    """Test that dispatch forwards types from multiple wrapper classes."""
+    left = _new_dispatch_subclass("MixedLeft")
+    right = _new_dispatch_subclass("MixedRight")
+    handler = _RecordingHandler(1.0)
+    op = torch.ops.aten.add.Tensor
+    left.implements(op)(handler)
+    inner_left = torch.tensor([1.0])
+    inner_right = torch.tensor([2.0])
+    wrapper_left = left(inner_left)
+    wrapper_right = right(inner_right)
+    result = left.__torch_dispatch__(op, (left, right), (wrapper_left, wrapper_right), {})
+    assert torch.equal(result, torch.full_like(inner_left, 1.0))
+    assert handler.calls[0][2] == (left, right)
+
+
+def test_torch_dispatch_forwards_related_types() -> None:
+    """Test that normal dispatch forwards types from related wrapper classes."""
+    parent = _new_dispatch_subclass("RelatedParent")
+    child = _new_dispatch_subclass("RelatedChild", parent)
+    handler = _RecordingHandler(1.0)
+    op = torch.ops.aten.add.Tensor
+    parent.implements(op)(handler)
+    inner_left = torch.tensor([1.0])
+    inner_right = torch.tensor([2.0])
+    result = op(child(inner_left), parent(inner_right))
+    assert torch.equal(result, torch.full_like(inner_left, 1.0))
+    assert handler.calls[0][2] == (child, parent)
