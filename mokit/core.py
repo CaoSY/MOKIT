@@ -279,6 +279,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
             fields.append(f"device='{device}'")
             printed_names.add("device")
 
+        # Mirror the dtype suffix logic of ``torch.Tensor.__repr__``.
         default_complex_dtype = torch.cdouble if torch.get_default_dtype() == torch.double else torch.cfloat
         if self.dtype not in (torch.get_default_dtype(), default_complex_dtype, torch.int64, torch.bool):
             fields.append(f"dtype={self.dtype}")
@@ -288,6 +289,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
             fields.append(f"layout={self.layout}")
             printed_names.add("layout")
 
+        # Mirror the grad_fn rendering logic of ``torch.Tensor.__repr__``.
         try:
             grad_fn = self.grad_fn
         except RuntimeError:
