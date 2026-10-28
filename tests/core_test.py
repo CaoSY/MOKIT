@@ -51,6 +51,46 @@ def test_is_hashable() -> None:
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
+# __init_subclass__
+# ------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("attr_name", MokitWrapperTensorBase._FLATTEN_ATTR_NAMES)
+def test_init_subclass_rejects_non_tuple_attribute(attr_name: str) -> None:
+    """Test that a non-tuple flatten attribute is rejected."""
+    with pytest.raises(TypeError, match=f"The class attribute '{attr_name}' must be a tuple."):
+        type("Bad", (MokitWrapperTensorBase,), {attr_name: ["payload"]})
+
+
+@pytest.mark.parametrize("attr_name", MokitWrapperTensorBase._FLATTEN_ATTR_NAMES)
+def test_init_subclass_rejects_non_string_field(attr_name: str) -> None:
+    """Test that a non-string field name is rejected."""
+    with pytest.raises(TypeError, match=f"The class attribute '{attr_name}' must be a tuple of strings."):
+        type("Bad", (MokitWrapperTensorBase,), {attr_name: (1,)})
+
+
+@pytest.mark.parametrize(
+    "attributes",
+    [
+        {"inner_tensor_names": ("payload", "payload")},
+        {"inner_tensor_names": ("payload",), "metadata_names": ("payload",)},
+        {"keyword_inner_tensor_names": ("bias",), "keyword_metadata_names": ("bias",)},
+    ],
+)
+def test_init_subclass_rejects_duplicate_field(attributes: dict[str, tuple[str, ...]]) -> None:
+    """Test that a field name declared more than once is rejected."""
+    with pytest.raises(ValueError, match="declared more than once"):
+        type("Bad", (MokitWrapperTensorBase,), attributes)
+
+
+@pytest.mark.parametrize("field", ["outer_size", "outer_stride"])
+def test_init_subclass_rejects_reserved_field(field: str) -> None:
+    """Test that a reserved field name is rejected."""
+    with pytest.raises(ValueError, match=f"Reserved field name.*{field}"):
+        type("Bad", (MokitWrapperTensorBase,), {"inner_tensor_names": (field,)})
+
+
+# ------------------------------------------------------------------------------
 # __repr__
 # ------------------------------------------------------------------------------
 
