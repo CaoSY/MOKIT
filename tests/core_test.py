@@ -1625,6 +1625,34 @@ def test_torch_dispatch_handler_not_implemented_raises_outer_error() -> None:
         torch.ops.aten.neg.default(wrapper)
 
 
+def test_torch_dispatch_not_implemented_skips_parent_handler() -> None:
+    """Test that a child handler returning NotImplemented does not reach the parent handler."""
+    parent = _new_wrapper_subclass("NotImplementedParent")
+    child = _new_wrapper_subclass("NotImplementedChild", parent)
+    parent_handler = _RecordingHandler(1.0)
+    child_calls: list[type[MokitWrapperTensorBase]] = []
+    op = torch.ops.aten.neg.default
+    parent.implements(op)(parent_handler)
+
+    def child_handler(
+        cls: type[MokitWrapperTensorBase],
+        func: OpOverload,
+        types: tuple[type[Any], ...],
+        args: tuple[Any, ...] = (),
+        kwargs: dict[str, Any] | None = None,
+    ) -> Any:
+        """Return NotImplemented without delegating to the parent."""
+        child_calls.append(cls)
+        return NotImplemented
+
+    child.implements(op)(child_handler)
+    wrapper = child(torch.tensor([1.0]))
+    with pytest.raises(TypeError, match="Multiple dispatch failed"):
+        op(wrapper)
+    assert child_calls == [child]
+    assert parent_handler.calls == []
+
+
 def test_torch_dispatch_deep_super_composition() -> None:
     """Test three-level same-key composition with a leaf runtime class."""
     top = _new_wrapper_subclass("DeepTop")
