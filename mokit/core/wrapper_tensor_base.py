@@ -1,21 +1,17 @@
 # SPDX-FileCopyrightText: 2026 CaoSY
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Core utilities for MOKIT."""
+"""Wrapper tensor base class and its dispatch helpers."""
 
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
 from typing import Any, ClassVar, Literal, Protocol, Self, TypeVar, cast, overload
 
 import torch
 from torch._custom_class_base import CustomClassBase
 from torch._ops import OpOverload
 
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class MokitConfigBase:
-    """The base class for all MOKIT config classes."""
+from mokit.core import MokitTensorBase
 
 
 class _TorchFunctionImpl(Protocol):
@@ -44,10 +40,6 @@ class _TorchDispatchImpl(Protocol):
         kwargs: dict[str, Any] | None = None,
     ) -> Any:
         """Dispatch an ATen operator."""
-
-
-class MokitTensorBase(torch.Tensor):
-    """The base class for all MOKIT tensor classes."""
 
 
 _HandlerT = TypeVar("_HandlerT", bound=Callable[..., Any])
