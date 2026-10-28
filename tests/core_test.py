@@ -152,6 +152,15 @@ class _GradFnFunction(torch.autograd.Function):
         return grad_outputs[0]
 
 
+class _InvalidGradFnWrapper(_Wrapper):
+    """A wrapper whose grad_fn access raises a RuntimeError."""
+
+    @property
+    def grad_fn(self) -> Any:  # pyrefly: ignore[bad-override]
+        """Raise a RuntimeError."""
+        raise RuntimeError("grad_fn unavailable")
+
+
 def test_repr_defaults() -> None:
     """Test default repr output and the __str__ fallback."""
     wrapper = _Wrapper(torch.tensor([1.0, 2.0]))
@@ -212,6 +221,34 @@ def test_repr_dtype() -> None:
     assert repr(wrapper) == expected
 
 
+@pytest.mark.parametrize(
+    ("default_dtype", "dtype", "dtype_printed"),
+    [
+        (torch.float32, torch.complex64, False),
+        (torch.float32, torch.complex128, True),
+        (torch.float32, torch.int64, False),
+        (torch.float32, torch.bool, False),
+        (torch.double, torch.float64, False),
+        (torch.double, torch.complex128, False),
+        (torch.double, torch.complex64, True),
+        (torch.double, torch.float32, True),
+    ],
+)
+def test_repr_default_dtype_suppression(
+    default_dtype: torch.dtype,
+    dtype: torch.dtype,
+    dtype_printed: bool,
+) -> None:
+    """Test that inferred default dtypes are omitted from the repr."""
+    original_dtype = torch.get_default_dtype()
+    torch.set_default_dtype(default_dtype)
+    try:
+        rendered = repr(_Wrapper(torch.ones(2, dtype=dtype)))
+    finally:
+        torch.set_default_dtype(original_dtype)
+    assert rendered.startswith(f"_Wrapper(dtype={dtype},") is dtype_printed
+
+
 def test_repr_device() -> None:
     """Test that a non-default device is printed before the declared fields."""
     wrapper = _Wrapper(torch.tensor([1.0, 2.0], device="meta"))
@@ -239,6 +276,34 @@ def test_repr_grad_fn() -> None:
         "bias=tensor([0., 0.]), note='note')"
     )
     assert repr(wrapper) == expected
+
+
+def test_repr_invalid_grad_fn() -> None:
+    """Test that an invalid grad_fn is rendered as Invalid."""
+    wrapper = _InvalidGradFnWrapper(torch.tensor([1.0]))
+    assert repr(wrapper).startswith("_InvalidGradFnWrapper(grad_fn=<Invalid>, payload=")
+
+
+def test_repr_cpp_function_grad_fn() -> None:
+    """Test that a CppFunction grad_fn is rendered by its unqualified name."""
+
+    class CppFunction:
+        """A stub matching the type name inspected by __repr__."""
+
+        def name(self) -> str:
+            """Return a namespace-qualified function name."""
+            return "namespace::op"
+
+    class CppFunctionWrapper(_Wrapper):
+        """A wrapper whose grad_fn is a C++ function stub."""
+
+        @property
+        def grad_fn(self) -> Any:  # pyrefly: ignore[bad-override]
+            """Return the C++ function stub."""
+            return CppFunction()
+
+    wrapper = CppFunctionWrapper(torch.tensor([1.0]))
+    assert repr(wrapper).startswith("CppFunctionWrapper(grad_fn=<op>, payload=")
 
 
 def test_repr_layout() -> None:
