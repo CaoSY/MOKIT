@@ -5,7 +5,7 @@
 
 import dataclasses
 from collections.abc import Callable, Sequence
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, Self, cast
 
 import pytest
 import torch
@@ -56,7 +56,7 @@ def test_is_hashable() -> None:
 
 
 class _Wrapper(MokitWrapperTensorBase):
-    """A wrapper whose four flatten attributes cover every field kind, used for repr tests."""
+    """A wrapper whose four flatten attributes cover every field kind."""
 
     inner_tensor_names = ("payload",)
     metadata_names = ("tag",)
@@ -74,20 +74,23 @@ class _Wrapper(MokitWrapperTensorBase):
         note: object = "note",
         requires_grad: bool = False,
         layout: torch.layout = torch.strided,
-    ) -> torch.Tensor:
+    ) -> Self:
         """Create the wrapper tensor."""
         if outer_size is None:
             outer_size = inner.shape
         if outer_stride is None:
             outer_stride = inner.stride()
-        return torch.Tensor._make_wrapper_subclass(
-            cls,
-            outer_size,
-            outer_stride,
-            dtype=inner.dtype,
-            device=inner.device,
-            layout=layout,
-            requires_grad=requires_grad,
+        return cast(
+            Self,
+            torch.Tensor._make_wrapper_subclass(
+                cls,
+                outer_size,
+                outer_stride,
+                dtype=inner.dtype,
+                device=inner.device,
+                layout=layout,
+                requires_grad=requires_grad,
+            ),
         )
 
     def __init__(
@@ -110,17 +113,20 @@ class _Wrapper(MokitWrapperTensorBase):
 
 
 class _EmptyWrapper(MokitWrapperTensorBase):
-    """A wrapper with no flattened fields, used for repr tests."""
+    """A wrapper with no flattened fields."""
 
     def __new__(
         cls,
         outer_size: Sequence[int | torch.SymInt] | None = None,
         outer_stride: Sequence[int | torch.SymInt] | None = None,
-    ) -> torch.Tensor:
+    ) -> Self:
         """Create the wrapper tensor."""
         if outer_size is None:
             outer_size = (0,)
-        return torch.Tensor._make_wrapper_subclass(cls, outer_size, outer_stride, dtype=torch.float32)
+        return cast(
+            Self,
+            torch.Tensor._make_wrapper_subclass(cls, outer_size, outer_stride, dtype=torch.float32),
+        )
 
     def __init__(
         self,
@@ -325,6 +331,86 @@ def test_repr_filters_previously_printed_field_names() -> None:
 def test_repr_empty_wrapper() -> None:
     """Test that a wrapper with no fields prints empty parentheses."""
     assert repr(_EmptyWrapper()) == "_EmptyWrapper()"
+
+
+# ------------------------------------------------------------------------------
+# __tensor_flatten__
+# ------------------------------------------------------------------------------
+
+
+def test_tensor_flatten_returns_inner_names_and_metadata() -> None:
+    """Test that flatten returns inner tensor names and metadata."""
+    wrapper = _Wrapper(torch.tensor([1.0, 2.0]), "hello", bias=torch.tensor([3.0, 4.0]), note="world")
+    tensor_names, metadata = wrapper.__tensor_flatten__()
+    assert tuple(tensor_names) == ("payload", "bias")
+    assert metadata == {"tag": "hello", "note": "world"}
+
+
+def test_tensor_flatten_empty_wrapper() -> None:
+    """Test that flatten returns empty names and metadata for a fieldless wrapper."""
+    wrapper = _EmptyWrapper()
+    tensor_names, metadata = wrapper.__tensor_flatten__()
+    assert tuple(tensor_names) == ()
+    assert metadata == {}
+
+
+# ------------------------------------------------------------------------------
+# __tensor_unflatten__
+# ------------------------------------------------------------------------------
+
+
+def test_tensor_unflatten_reconstructs_all_field_kinds() -> None:
+    """Test that unflatten rebuilds positional and keyword inner tensors and metadata."""
+    payload = torch.tensor([1.0, 2.0])
+    bias = torch.tensor([3.0, 4.0])
+    rebuilt = _Wrapper.__tensor_unflatten__(
+        {"bias": bias, "payload": payload},
+        {"note": "world", "tag": "hello"},
+        (2,),
+        (1,),
+    )
+    assert isinstance(rebuilt, _Wrapper)
+    assert rebuilt.payload is payload
+    assert rebuilt.bias is bias
+    assert rebuilt.tag == "hello"
+    assert rebuilt.note == "world"
+    assert rebuilt.size() == torch.Size([2])
+    assert rebuilt.stride() == (1,)
+
+
+def test_tensor_unflatten_forwards_outer_geometry() -> None:
+    """Test that unflatten passes outer_size and outer_stride to the constructor."""
+    rebuilt = _EmptyWrapper.__tensor_unflatten__({}, {}, (4,), (2,))
+    assert isinstance(rebuilt, _EmptyWrapper)
+    assert rebuilt.size() == torch.Size([4])
+    assert rebuilt.stride() == (2,)
+
+
+def test_tensor_unflatten_empty_wrapper() -> None:
+    """Test that unflatten rebuilds a fieldless wrapper."""
+    rebuilt = _EmptyWrapper.__tensor_unflatten__({}, {}, (0,), (1,))
+    assert isinstance(rebuilt, _EmptyWrapper)
+    assert rebuilt.size() == torch.Size([0])
+    assert rebuilt.stride() == (1,)
+
+
+def test_tensor_flatten_unflatten_round_trip() -> None:
+    """Test that flatten followed by unflatten preserves fields and geometry."""
+    payload = torch.tensor([[1.0, 2.0], [3.0, 4.0]]).t()
+    bias = torch.zeros(2, 2)
+    tag = "hello"
+    note = "world"
+    wrapper = _Wrapper(payload, tag, bias=bias, note=note)
+    tensor_names, metadata = wrapper.__tensor_flatten__()
+    inner_tensors = {name: getattr(wrapper, name) for name in tensor_names}
+    rebuilt = type(wrapper).__tensor_unflatten__(inner_tensors, metadata, wrapper.size(), wrapper.stride())
+    assert type(rebuilt) is type(wrapper)
+    assert rebuilt.payload is wrapper.payload
+    assert rebuilt.bias is wrapper.bias
+    assert rebuilt.tag is tag
+    assert rebuilt.note is note
+    assert rebuilt.size() == wrapper.size()
+    assert rebuilt.stride() == wrapper.stride()
 
 
 # ------------------------------------------------------------------------------
