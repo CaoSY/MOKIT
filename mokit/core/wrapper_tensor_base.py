@@ -95,6 +95,14 @@ class MokitWrapperTensorBase(MokitTensorBase):
     ``__tensor_flatten__`` and ``__tensor_unflatten__`` are PyTorch's PT2 tracing protocol.
     They do not implement pickle support.
 
+    ``is_contiguous`` and ``contiguous`` describe the logical tensor defined by
+    ``outer_size`` and ``outer_stride`` by default. Inner tensors are representation
+    details and may have different layouts, so the base does not forward ``contiguous``
+    to them; an already outer-contiguous wrapper returns itself without copying its inner
+    tensors. A subclass that wants representation-level contiguity can override
+    ``torch.Tensor.is_contiguous`` and ``torch.Tensor.contiguous`` with
+    ``implements_torch_function``, keeping both definitions consistent.
+
     Dispatch registration and forwarding follow this workflow:
 
     1. A concrete subclass registers handlers with ``implements_torch_function`` for
