@@ -11,6 +11,116 @@ import torch
 from torch._ops import OpOverload
 
 from mokit.core import MokitWrapperTensorBase
+from mokit.core.wrapper_tensor_base import unpack_args
+
+# ==============================================================================
+# unpack_args
+# ==============================================================================
+
+
+def test_unpack_args_forwards_metadata_and_positional_arguments() -> None:
+    """Test that unpack_args forwards metadata and unpacks positional arguments."""
+    calls: list[tuple[Any, ...]] = []
+
+    def handler(
+        cls: type[Any],
+        func: Callable[..., Any],
+        types: tuple[type[Any], ...],
+        first: int,
+        second: int,
+    ) -> int:
+        """Record the call and return the sum of its arguments."""
+        calls.append((cls, func, types, first, second))
+        return first + second
+
+    packed = unpack_args(handler)
+    func = torch.ops.aten.add.default
+    result = packed(int, func, (int,), (2, 3), {})
+
+    assert result == 5
+    assert calls == [(int, func, (int,), 2, 3)]
+
+
+def test_unpack_args_expands_keyword_arguments() -> None:
+    """Test that unpack_args expands keyword arguments for the handler."""
+    calls: list[tuple[int, int]] = []
+
+    def handler(
+        cls: type[Any],
+        func: Callable[..., Any],
+        types: tuple[type[Any], ...],
+        first: int,
+        *,
+        second: int = 0,
+    ) -> int:
+        """Record the integer arguments and return their sum."""
+        calls.append((first, second))
+        return first + second
+
+    packed = unpack_args(handler)
+    result = packed(type(handler), str, (), (2,), {"second": 3})
+
+    assert result == 5
+    assert calls == [(2, 3)]
+
+
+def test_unpack_args_treats_none_kwargs_as_empty() -> None:
+    """Test that unpack_args treats None kwargs as no keyword arguments."""
+
+    def handler(
+        cls: type[Any],
+        func: Callable[..., Any],
+        types: tuple[type[Any], ...],
+        value: int,
+        *,
+        scale: int = 1,
+    ) -> int:
+        """Return the scaled value."""
+        return value * scale
+
+    packed = unpack_args(handler)
+
+    assert packed(int, str, (), (4,), None) == 4
+
+
+def test_unpack_args_preserves_handler_metadata() -> None:
+    """Test that unpack_args preserves the wrapped handler's metadata."""
+
+    def handler(
+        cls: type[Any],
+        func: Callable[..., Any],
+        types: tuple[type[Any], ...],
+    ) -> None:
+        """Accept dispatch metadata."""
+
+    packed = cast(Any, unpack_args(handler))
+
+    assert packed is not handler
+    assert packed.__name__ == handler.__name__
+    assert packed.__doc__ == handler.__doc__
+    assert packed.__module__ == handler.__module__
+    assert packed.__wrapped__ is handler
+
+
+def test_unpack_args_propagates_handler_exception() -> None:
+    """Test that unpack_args propagates exceptions raised by the handler."""
+
+    class HandlerError(Exception):
+        """An exception raised by the test handler."""
+
+    def handler(
+        cls: type[Any],
+        func: Callable[..., Any],
+        types: tuple[type[Any], ...],
+    ) -> None:
+        """Raise the test exception."""
+        raise HandlerError
+
+    packed = unpack_args(handler)
+
+    with pytest.raises(HandlerError):
+        packed(int, str, (), (), None)
+
 
 # ==============================================================================
 # MokitWrapperTensorBase
