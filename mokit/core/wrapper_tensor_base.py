@@ -3,6 +3,7 @@
 
 """Wrapper tensor base class and its dispatch helpers."""
 
+import functools
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, ClassVar, Literal, Protocol, Self, cast, overload
@@ -40,6 +41,80 @@ class _TorchDispatchImpl(Protocol):
         kwargs: dict[str, Any] | None = None,
     ) -> Any:
         """Dispatch an ATen operator."""
+
+
+class HandlerProtocol[
+    ClsType: type[Any],
+    FuncType: Callable[..., Any] | OpOverload,
+    TypesType: tuple[type[Any], ...],
+    **Params,
+    ReturnType,
+](Protocol):
+    """The protocol for a handler with unpacked arguments."""
+
+    def __call__(
+        self,
+        cls: ClsType,
+        func: FuncType,
+        types: TypesType,
+        *args: Params.args,
+        **kwargs: Params.kwargs,
+    ) -> ReturnType:
+        """Dispatch an operation to the handler."""
+
+
+class PackedHandlerProtocol[
+    ClsType: type[Any],
+    FuncType: Callable[..., Any] | OpOverload,
+    TypesType: tuple[type[Any], ...],
+    ReturnType,
+](Protocol):
+    """The protocol for a handler with packed arguments."""
+
+    def __call__(
+        self,
+        cls: ClsType,
+        func: FuncType,
+        types: TypesType,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any] | None,
+    ) -> ReturnType:
+        """Invoke the packed handler."""
+
+
+def unpack_args[
+    ClsType: type[Any],
+    FuncType: Callable[..., Any] | OpOverload,
+    TypesType: tuple[type[Any], ...],
+    **Params,
+    ReturnType,
+](
+    handler: HandlerProtocol[ClsType, FuncType, TypesType, Params, ReturnType],
+) -> PackedHandlerProtocol[ClsType, FuncType, TypesType, ReturnType]:
+    """
+    Adapt a handler with unpacked arguments to the packed calling convention.
+
+    Args:
+        handler: Handler accepting ``(cls, func, types, *args, **kwargs)``.
+
+    Returns:
+        A handler accepting ``(cls, func, types, args, kwargs)`` and preserving the
+        handler's metadata parameter types and result type.
+
+    """
+
+    @functools.wraps(handler)
+    def packed(
+        cls: ClsType,
+        func: FuncType,
+        types: TypesType,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any] | None,
+    ) -> ReturnType:
+        """Unpack the dispatch arguments and invoke the concrete handler."""
+        return handler(cls, func, types, *args, **(kwargs if kwargs is not None else {}))
+
+    return packed
 
 
 @overload
