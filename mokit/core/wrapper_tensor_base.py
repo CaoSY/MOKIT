@@ -5,7 +5,7 @@
 
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, ClassVar, Literal, Protocol, Self, TypeVar, cast, overload
+from typing import Any, ClassVar, Literal, Protocol, Self, cast, overload
 
 import torch
 from torch._custom_class_base import CustomClassBase
@@ -40,9 +40,6 @@ class _TorchDispatchImpl(Protocol):
         kwargs: dict[str, Any] | None = None,
     ) -> Any:
         """Dispatch an ATen operator."""
-
-
-_HandlerT = TypeVar("_HandlerT", bound=Callable[..., Any])
 
 
 @overload
@@ -584,11 +581,11 @@ class MokitWrapperTensorBase(MokitTensorBase):
             return func(*args, **kwargs)
 
     @classmethod
-    def implements_torch_function(
+    def implements_torch_function[HandlerType: Callable[..., Any]](
         cls,
         *torch_fns: Callable[..., Any],
         override: bool = False,
-    ) -> Callable[[_HandlerT], _HandlerT]:
+    ) -> Callable[[HandlerType], HandlerType]:
         """
         Return a decorator that registers torch function handlers on this class.
 
@@ -629,7 +626,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
         if len(unique_fns) != len(fns):
             raise KeyError("Torch function keys must be unique within one registration.")
 
-        def decorator(func: _HandlerT) -> _HandlerT:
+        def decorator(func: HandlerType) -> HandlerType:
             _register_handlers(
                 cls,
                 "_TORCH_FN_TABLE",
@@ -681,11 +678,11 @@ class MokitWrapperTensorBase(MokitTensorBase):
         )
 
     @classmethod
-    def implements(
+    def implements[HandlerType: Callable[..., Any]](
         cls,
         *aten_ops: OpOverload,
         override: bool = False,
-    ) -> Callable[[_HandlerT], _HandlerT]:
+    ) -> Callable[[HandlerType], HandlerType]:
         """
         Return a decorator that registers ATen operator handlers on this class.
 
@@ -732,7 +729,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
         if len(unique_ops) != len(ops):
             raise KeyError("Aten operator keys must be unique within one registration.")
 
-        def decorator(func: _HandlerT) -> _HandlerT:
+        def decorator(func: HandlerType) -> HandlerType:
             _register_handlers(
                 cls,
                 "_ATEN_OP_TABLE",
