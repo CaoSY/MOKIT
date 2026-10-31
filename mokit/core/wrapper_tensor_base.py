@@ -438,11 +438,13 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
     Handlers are operator-specific. When registering one, annotate its parameters and
     return value to match that operator's actual dispatch call rather than the general
-    ``__torch_dispatch__`` or ``__torch_function__`` signature. For example, the default
-    ``aten.clone.default`` handler declares ``args: tuple[WrapperType]``,
-    ``kwargs: dict[str, Any]``, and a ``WrapperType`` return value. Registration accepts
-    ``Callable[..., Any]`` and does not enforce these annotations, but accurate annotations
-    document each operator's contract.
+    ``__torch_dispatch__`` or ``__torch_function__`` signature. A handler may accept the
+    packed ``(cls, func, types, args, kwargs)`` arguments directly, or use the optional
+    ``unpack_args`` helper to receive the operator's arguments unpacked. For example, the
+    default ``aten.clone.default`` handler uses ``unpack_args`` and declares
+    ``self: WrapperType``, ``memory_format: torch.memory_format | None``, and a
+    ``WrapperType`` return value. Registration accepts ``Callable[..., Any]`` and does not
+    enforce these annotations, but accurate annotations document each operator's contract.
 
     """
 
@@ -819,12 +821,14 @@ implements = MokitWrapperTensorBase.implements
 
 
 @implements(torch.ops.aten.clone.default)
+@unpack_args
 def _[WrapperType: MokitWrapperTensorBase](
     cls: type[WrapperType],
     func: OpOverload,
     types: tuple[type[WrapperType]],
-    args: tuple[WrapperType],
-    kwargs: dict[str, Any],
+    self: WrapperType,
+    *,
+    memory_format: torch.memory_format | None = None,
 ) -> WrapperType:
     """
     Clone a wrapper tensor by cloning each inner tensor once per object identity.
@@ -844,45 +848,42 @@ def _[WrapperType: MokitWrapperTensorBase](
         cls: Runtime wrapper class whose ``__tensor_unflatten__`` reconstructs the result.
         func: The ``aten.clone.default`` operator.
         types: Participating dispatch types.
-        args: Positional operator arguments; ``args[0]`` is the wrapper to clone.
-        kwargs: Keyword operator arguments, including ``memory_format`` when supplied.
+        self: The wrapper to clone.
+        memory_format: The requested memory format, if any.
 
     Returns:
         A new wrapper of the same runtime class.
 
     Raises:
         AssertionError: If assertions are enabled and ``cls`` does not match the runtime
-            class of ``args[0]``.
+            class of ``self``.
 
     """
-    assert type(args[0]) is cls, (
-        f"{func}: dispatch cls={cls.__name__} does not match type(args[0])={type(args[0]).__name__}"
+    assert type(self) is cls, (
+        f"{func}: dispatch cls={cls.__name__} does not match type(self)={type(self).__name__}; types={types}"
     )
 
-    (wrapper,) = args
-
-    tensor_names, metadata = wrapper.__tensor_flatten__()
+    tensor_names, metadata = self.__tensor_flatten__()
 
     id_cloned_tensor: dict[int, torch.Tensor] = {}
     cloned_inner_tensors: dict[str, torch.Tensor] = {}
 
     for name in tensor_names:
-        tensor: torch.Tensor = getattr(wrapper, name)
+        tensor: torch.Tensor = getattr(self, name)
         tensor_id: int = id(tensor)
 
         if tensor_id not in id_cloned_tensor:
-            id_cloned_tensor[tensor_id] = func(tensor, **kwargs)
+            id_cloned_tensor[tensor_id] = func(tensor, memory_format=memory_format)
 
         cloned_inner_tensors[name] = id_cloned_tensor[tensor_id]
 
-    outer_size = wrapper.size()
+    outer_size = self.size()
 
-    memory_format: torch.memory_format | None = kwargs.get("memory_format")
     if memory_format in (None, torch.preserve_format):
-        outer_stride = wrapper.stride()
+        outer_stride = self.stride()
     else:
         # memory_format only defines strides for the strided layout. Passing
-        # wrapper.layout to this probe would produce meaningless or unsupported
+        # self.layout to this probe would produce meaningless or unsupported
         # sparse strides; non-strided wrappers with explicit formats are
         # subclass-specific.
         outer_stride = torch.empty(
@@ -895,12 +896,15 @@ def _[WrapperType: MokitWrapperTensorBase](
 
 
 @implements(torch.ops.aten.clone.out)
+@unpack_args
 def _[WrapperType: MokitWrapperTensorBase](
     cls: type[WrapperType],
     func: OpOverload,
     types: tuple[type[WrapperType]],
-    args: tuple[WrapperType],
-    kwargs: dict[str, Any],
+    self: WrapperType,
+    *,
+    memory_format: torch.memory_format | None = None,
+    out: WrapperType,
 ) -> WrapperType:
     """
     Clone a wrapper into an existing wrapper of the same runtime class.
@@ -924,44 +928,42 @@ def _[WrapperType: MokitWrapperTensorBase](
         cls: Runtime wrapper class shared by the source and ``out``.
         func: The ``aten.clone.out`` operator.
         types: Participating dispatch types.
-        args: Positional operator arguments; ``args[0]`` is the source wrapper.
-        kwargs: Keyword operator arguments; ``kwargs["out"]`` is the destination wrapper.
+        self: The source wrapper.
+        memory_format: The requested memory format, if any.
+        out: The destination wrapper.
 
     Returns:
         The ``out`` wrapper after its inner tensors have been updated.
 
     Raises:
-        AssertionError: If assertions are enabled and either the source or ``out`` does
+        AssertionError: If assertions are enabled and either ``self`` or ``out`` does
             not match the dispatch class.
         ValueError: If outer dtype, device, layout, shape, or stride differs; if declared
             metadata differs or is not equality-comparable; or if exact-object inner
             alias topology differs.
 
     """
-    (wrapper,) = args
-    out = kwargs.pop("out")
-
-    assert type(args[0]) is cls, (
-        f"{func}: dispatch cls={cls.__name__} does not match type(args[0])={type(args[0]).__name__}"
+    assert type(self) is cls, (
+        f"{func}: dispatch cls={cls.__name__} does not match type(self)={type(self).__name__}; types={types}"
     )
     assert type(out) is cls, f"{func}: out type={type(out).__name__} does not match dispatch cls={cls.__name__}"
 
-    if wrapper.dtype is not out.dtype:
-        raise ValueError(f"{func}: dtype mismatch: wrapper={wrapper.dtype}, out={out.dtype}")
+    if self.dtype is not out.dtype:
+        raise ValueError(f"{func}: dtype mismatch: self={self.dtype}, out={out.dtype}")
 
-    if wrapper.device != out.device:
-        raise ValueError(f"{func}: device mismatch: wrapper={wrapper.device}, out={out.device}")
+    if self.device != out.device:
+        raise ValueError(f"{func}: device mismatch: self={self.device}, out={out.device}")
 
-    if wrapper.layout is not out.layout:
-        raise ValueError(f"{func}: layout mismatch: wrapper={wrapper.layout}, out={out.layout}")
+    if self.layout is not out.layout:
+        raise ValueError(f"{func}: layout mismatch: self={self.layout}, out={out.layout}")
 
-    if wrapper.shape != out.shape:
-        raise ValueError(f"{func}: shape mismatch: wrapper={wrapper.shape}, out={out.shape}")
+    if self.shape != out.shape:
+        raise ValueError(f"{func}: shape mismatch: self={self.shape}, out={out.shape}")
 
-    if wrapper.stride() != out.stride():
-        raise ValueError(f"{func}: stride mismatch: wrapper={wrapper.stride()}, out={out.stride()}")
+    if self.stride() != out.stride():
+        raise ValueError(f"{func}: stride mismatch: self={self.stride()}, out={out.stride()}")
 
-    tensor_names, metadata = wrapper.__tensor_flatten__()
+    tensor_names, metadata = self.__tensor_flatten__()
 
     for name, value in metadata.items():
         out_value = getattr(out, name)
@@ -975,22 +977,26 @@ def _[WrapperType: MokitWrapperTensorBase](
             raise ValueError(f"{func}: metadata {name!r} is not equality-comparable") from exc
 
         if not equal:
-            raise ValueError(f"{func}: metadata {name!r} differs: wrapper={value!r}, out={out_value!r}")
+            raise ValueError(f"{func}: metadata {name!r} differs: self={value!r}, out={out_value!r}")
 
     # Check exact-object alias topology: both wrappers must partition their field names
     # into the same groups of identical tensor objects. View-level storage aliasing is
     # intentionally not examined.
-    wrapper_first_occurrence: dict[int, int] = {}
+    self_first_occurrence: dict[int, int] = {}
     out_first_occurrence: dict[int, int] = {}
     for index, name in enumerate(tensor_names):
-        wrapper_index = wrapper_first_occurrence.setdefault(id(getattr(wrapper, name)), index)
+        self_index = self_first_occurrence.setdefault(id(getattr(self, name)), index)
         out_index = out_first_occurrence.setdefault(id(getattr(out, name)), index)
 
-        if wrapper_index != out_index:
+        if self_index != out_index:
             raise ValueError(f"{func}: inner-tensor alias topology differs at field {name!r}")
 
-    for first_index in wrapper_first_occurrence.values():
+    for first_index in self_first_occurrence.values():
         name = tensor_names[first_index]
-        func(getattr(wrapper, name), **kwargs, out=getattr(out, name))
+        func(
+            getattr(self, name),
+            memory_format=memory_format,
+            out=getattr(out, name),
+        )
 
     return out
