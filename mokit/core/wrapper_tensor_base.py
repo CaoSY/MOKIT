@@ -15,34 +15,6 @@ from torch._ops import OpOverload
 from mokit.core import MokitTensorBase
 
 
-class _TorchFunctionImpl(Protocol):
-    """Unbound implementation of a torch function dispatcher."""
-
-    def __call__(
-        self,
-        cls: type[Any],
-        func: Callable[..., Any],
-        types: tuple[type[Any], ...],
-        args: tuple[Any, ...] = (),
-        kwargs: dict[str, Any] | None = None,
-    ) -> Any:
-        """Dispatch a torch function."""
-
-
-class _TorchDispatchImpl(Protocol):
-    """Unbound implementation of an ATen operator dispatcher."""
-
-    def __call__(
-        self,
-        cls: type[Any],
-        func: OpOverload,
-        types: tuple[type[Any], ...],
-        args: tuple[Any, ...] = (),
-        kwargs: dict[str, Any] | None = None,
-    ) -> Any:
-        """Dispatch an ATen operator."""
-
-
 class HandlerProtocol[
     ClsType: type[Any],
     FuncType: Callable[..., Any] | OpOverload,
@@ -117,6 +89,30 @@ def unpack_args[
     return packed
 
 
+class TorchFunctionImpl(
+    PackedHandlerProtocol[
+        type[Any],
+        Callable[..., Any],
+        tuple[type[Any], ...],
+        Any,
+    ],
+    Protocol,
+):
+    """Unbound implementation of a torch function dispatcher."""
+
+
+class TorchDispatchImpl(
+    PackedHandlerProtocol[
+        type[Any],
+        OpOverload,
+        tuple[type[Any], ...],
+        Any,
+    ],
+    Protocol,
+):
+    """Unbound implementation of an ATen operator dispatcher."""
+
+
 @overload
 def _call_handler_from_table(
     owner_cls: type[MokitWrapperTensorBase],
@@ -186,7 +182,7 @@ def _register_handlers(
     keys: tuple[Callable[..., Any] | None, ...],
     func: Callable[..., Any],
     override: bool,
-    make_method: Callable[[type[MokitWrapperTensorBase]], _TorchFunctionImpl],
+    make_method: Callable[[type[MokitWrapperTensorBase]], TorchFunctionImpl],
 ) -> None: ...
 
 
@@ -198,7 +194,7 @@ def _register_handlers(
     keys: tuple[OpOverload | None, ...],
     func: Callable[..., Any],
     override: bool,
-    make_method: Callable[[type[MokitWrapperTensorBase]], _TorchDispatchImpl],
+    make_method: Callable[[type[MokitWrapperTensorBase]], TorchDispatchImpl],
 ) -> None: ...
 
 
@@ -211,7 +207,7 @@ def _register_handlers(
     override: bool,
     make_method: Callable[
         [type[MokitWrapperTensorBase]],
-        _TorchFunctionImpl | _TorchDispatchImpl,
+        TorchFunctionImpl | TorchDispatchImpl,
     ],
 ) -> None:
     """
@@ -264,7 +260,7 @@ def _register_handlers(
 
 def _make_subclass_torch_function(
     owner_cls: type[MokitWrapperTensorBase],
-) -> _TorchFunctionImpl:
+) -> TorchFunctionImpl:
     """
     Create an unbound torch function dispatcher for ``owner_cls``.
 
@@ -296,7 +292,7 @@ def _make_subclass_torch_function(
 
 def _make_subclass_torch_dispatch(
     owner_cls: type[MokitWrapperTensorBase],
-) -> _TorchDispatchImpl:
+) -> TorchDispatchImpl:
     """
     Create an unbound ATen operator dispatcher for ``owner_cls``.
 
@@ -462,8 +458,8 @@ class MokitWrapperTensorBase(MokitTensorBase):
         "keyword_metadata_names",
     )
 
-    _TORCH_FN_TABLE: ClassVar[dict[Callable[..., Any] | None, Callable[..., Any]]] = {}
-    _ATEN_OP_TABLE: ClassVar[dict[OpOverload | None, Callable[..., Any]]] = {}
+    _TORCH_FN_TABLE: ClassVar[dict[Callable[..., Any] | None, TorchFunctionImpl]] = {}
+    _ATEN_OP_TABLE: ClassVar[dict[OpOverload | None, TorchDispatchImpl]] = {}
 
     @classmethod
     def __init_subclass__(cls, **kwargs: Any) -> None:
