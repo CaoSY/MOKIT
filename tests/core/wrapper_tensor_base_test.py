@@ -3128,3 +3128,453 @@ def test_torch_function_forwards_related_types() -> None:
     result = torch.add(child(inner_left), parent(inner_right))
     assert torch.equal(result, torch.full_like(inner_left, 1.0))
     assert handler.calls[0][2] == (child, parent)
+
+
+# ==============================================================================
+# Clone handlers
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------------------
+
+
+class _AliasWrapper(MokitWrapperTensorBase):
+    """A wrapper with two inner tensor fields for alias-topology tests."""
+
+    inner_tensor_names = ("left", "right")
+
+    def __new__(
+        cls,
+        left: torch.Tensor,
+        right: torch.Tensor,
+        outer_size: Sequence[int | torch.SymInt] | None = None,
+        outer_stride: Sequence[int | torch.SymInt] | None = None,
+        *,
+        storage_offset: int | None = None,
+    ) -> Self:
+        """Create the wrapper tensor."""
+        if outer_size is None:
+            outer_size = left.shape
+        if outer_stride is None:
+            outer_stride = left.stride()
+        return torch.Tensor._make_wrapper_subclass(
+            cls,
+            outer_size,
+            outer_stride,
+            storage_offset=storage_offset,
+            dtype=left.dtype,
+            device=left.device,
+        )
+
+    def __init__(
+        self,
+        left: torch.Tensor,
+        right: torch.Tensor,
+        outer_size: Sequence[int | torch.SymInt] | None = None,
+        outer_stride: Sequence[int | torch.SymInt] | None = None,
+        *,
+        storage_offset: int | None = None,
+    ) -> None:
+        """Store the inner tensors."""
+        self.left = left
+        self.right = right
+
+
+class _WrapperSubclass(_Wrapper):
+    """A wrapper subclass used to test dispatch-class checks."""
+
+
+class _Uncomparable:
+    """A metadata value whose equality comparison raises."""
+
+    def __eq__(self, _other: object) -> bool:
+        """Reject equality comparison."""
+        raise RuntimeError("comparison is unsupported")
+
+
+# ------------------------------------------------------------------------------
+# aten.clone.default
+# ------------------------------------------------------------------------------
+
+
+def test_clone_default_clones_inner_tensors_and_preserves_metadata() -> None:
+    """Test that clone.default clones inner tensors and preserves metadata references."""
+    inner = torch.arange(4, dtype=torch.float32)
+    tag = ["source"]
+    note = {"note": 1}
+    wrapper = _Wrapper(inner, tag, bias=torch.ones(4), note=note)
+
+    cloned = wrapper.clone()
+
+    assert type(cloned) is _Wrapper
+    assert cloned is not wrapper
+    assert cloned.payload is not wrapper.payload
+    assert torch.equal(cloned.payload, wrapper.payload)
+    assert cloned.bias is not wrapper.bias
+    assert torch.equal(cloned.bias, wrapper.bias)
+    assert cloned.tag is tag
+    assert cloned.note is note
+    assert cloned.shape == wrapper.shape
+    assert cloned.stride() == wrapper.stride()
+
+
+def test_clone_default_deduplicates_shared_inner_tensors() -> None:
+    """Test that clone.default clones an inner tensor once per object identity."""
+    shared = torch.arange(4, dtype=torch.float32)
+    wrapper = _AliasWrapper(shared, shared)
+
+    cloned = torch.ops.aten.clone.default(wrapper)
+
+    assert cloned.left is cloned.right
+    assert cloned.left is not shared
+    assert torch.equal(cloned.left, shared)
+
+
+def test_clone_default_does_not_preserve_view_storage_aliasing() -> None:
+    """Test that clone.default gives distinct views independent clones."""
+    storage = torch.arange(6, dtype=torch.float32)
+    wrapper = _AliasWrapper(storage[:3], storage[3:])
+
+    cloned = torch.ops.aten.clone.default(wrapper)
+
+    assert cloned.left is not cloned.right
+    assert cloned.left.data_ptr() != cloned.right.data_ptr()
+    assert torch.equal(cloned.left, storage[:3])
+    assert torch.equal(cloned.right, storage[3:])
+
+
+def test_clone_default_clones_nested_wrapper_inner_tensor() -> None:
+    """Test that clone.default recursively clones an inner wrapper tensor."""
+    leaf = torch.arange(4, dtype=torch.float32)
+    nested_tag = object()
+    outer_tag = object()
+    nested = _Wrapper(leaf, tag=nested_tag)
+    outer = _Wrapper(nested, tag=outer_tag, bias=torch.zeros(4, dtype=torch.float32))
+
+    cloned = torch.ops.aten.clone.default(outer)
+
+    assert type(cloned) is _Wrapper
+    assert cloned is not outer
+    assert cloned.tag is outer_tag
+    assert cloned.payload is not nested
+    assert type(cloned.payload) is _Wrapper
+    assert cloned.payload.tag is nested_tag
+    assert cloned.payload.payload is not leaf
+    assert torch.equal(cloned.payload.payload, leaf)
+    assert cloned.payload.shape == nested.shape
+    assert cloned.payload.stride() == nested.stride()
+
+
+def test_clone_default_deduplicates_shared_nested_wrappers() -> None:
+    """Test that clone.default clones a shared nested wrapper once."""
+    shared = _Wrapper(torch.arange(4, dtype=torch.float32))
+    wrapper = _AliasWrapper(shared, shared)
+
+    cloned = torch.ops.aten.clone.default(wrapper)
+
+    assert cloned.left is cloned.right
+    assert cloned.left is not shared
+    assert cloned.left.payload is not shared.payload
+
+
+@pytest.mark.parametrize("memory_format", [None, torch.preserve_format])
+def test_clone_default_preserves_outer_stride_without_explicit_format(
+    memory_format: torch.memory_format | None,
+) -> None:
+    """Test that clone.default preserves the outer stride without an explicit format."""
+    inner = torch.arange(6, dtype=torch.float32).reshape(2, 3)
+    wrapper = _Wrapper(inner, outer_size=(2, 3), outer_stride=(1, 2))
+
+    cloned = torch.ops.aten.clone.default(wrapper, memory_format=memory_format)
+
+    assert cloned.stride() == (1, 2)
+
+
+@pytest.mark.parametrize(
+    ("inner", "memory_format", "expected_stride"),
+    [
+        (torch.arange(6, dtype=torch.float32).reshape(2, 3).t(), torch.contiguous_format, (2, 1)),
+        (torch.arange(24, dtype=torch.float32).reshape(2, 3, 2, 2), torch.channels_last, (12, 1, 6, 3)),
+    ],
+)
+def test_clone_default_recomputes_outer_stride_for_explicit_memory_format(
+    inner: torch.Tensor,
+    memory_format: torch.memory_format,
+    expected_stride: tuple[int, ...],
+) -> None:
+    """Test that clone.default applies an explicit memory format to outer and inner geometry."""
+    wrapper = _Wrapper(inner)
+
+    cloned = torch.ops.aten.clone.default(wrapper, memory_format=memory_format)
+
+    assert cloned.stride() == expected_stride
+    assert cloned.payload.stride() == expected_stride
+
+
+def test_clone_default_handles_empty_wrapper() -> None:
+    """Test that clone.default reconstructs a wrapper with no fields."""
+    wrapper = _EmptyWrapper(outer_size=(2, 3), outer_stride=(3, 1))
+
+    cloned = torch.ops.aten.clone.default(wrapper)
+
+    assert type(cloned) is _EmptyWrapper
+    assert cloned is not wrapper
+    assert cloned.shape == wrapper.shape
+    assert cloned.stride() == wrapper.stride()
+
+
+def test_clone_default_rejects_dispatch_class_mismatch() -> None:
+    """Test that clone.default rejects a mismatched dispatch class."""
+    handler = MokitWrapperTensorBase._ATEN_OP_TABLE[torch.ops.aten.clone.default]
+    wrapper = _Wrapper(torch.zeros(2, 3))
+
+    with pytest.raises(AssertionError, match="does not match type"):
+        handler(_WrapperSubclass, torch.ops.aten.clone.default, (type(wrapper),), (wrapper,), {})
+
+
+# ------------------------------------------------------------------------------
+# aten.clone.out
+# ------------------------------------------------------------------------------
+
+
+def test_clone_out_updates_existing_inner_tensors_and_returns_out() -> None:
+    """Test that clone.out copies into out's inner tensors and returns out."""
+    source = _Wrapper(torch.arange(6, dtype=torch.float32).reshape(2, 3))
+    out = _Wrapper(torch.full((2, 3), -1.0, dtype=torch.float32))
+    payload = out.payload
+    bias = out.bias
+    version = out._version
+
+    returned = torch.ops.aten.clone.out(source, out=out)
+
+    assert returned is out
+    assert out.payload is payload
+    assert out.bias is bias
+    assert torch.equal(out.payload, source.payload)
+    assert torch.equal(out.bias, source.bias)
+    assert out._version == version + 1
+
+
+def test_clone_out_updates_nested_wrapper_in_place() -> None:
+    """Test that clone.out recursively updates a nested wrapper's inner tensor."""
+    source = _Wrapper(
+        _Wrapper(torch.arange(4, dtype=torch.float32)),
+        bias=torch.zeros(4, dtype=torch.float32),
+    )
+    out_nested = _Wrapper(torch.zeros(4, dtype=torch.float32))
+    out = _Wrapper(out_nested, bias=torch.zeros(4, dtype=torch.float32))
+    nested_ref = out.payload
+    leaf_ref = out_nested.payload
+
+    returned = torch.ops.aten.clone.out(source, out=out)
+
+    assert returned is out
+    assert out.payload is nested_ref
+    assert out_nested.payload is leaf_ref
+    assert torch.equal(out_nested.payload, cast(_Wrapper, source.payload).payload)
+
+
+def test_clone_out_rejects_nested_wrapper_metadata_mismatch() -> None:
+    """Test that clone.out propagates validation from a nested wrapper."""
+    source = _Wrapper(
+        _Wrapper(torch.arange(4, dtype=torch.float32), tag="source"),
+        bias=torch.zeros(4, dtype=torch.float32),
+    )
+    out_nested = _Wrapper(torch.zeros(4, dtype=torch.float32), tag="out")
+    out = _Wrapper(out_nested, bias=torch.zeros(4, dtype=torch.float32))
+
+    with pytest.raises(ValueError, match="metadata 'tag' differs"):
+        torch.ops.aten.clone.out(source, out=out)
+
+
+def test_clone_out_accepts_identical_metadata_objects() -> None:
+    """Test that clone.out accepts metadata fields that are the same object."""
+    tag = object()
+    source = _Wrapper(torch.zeros(2, 3), tag=tag)
+    out = _Wrapper(torch.zeros(2, 3), tag=tag)
+
+    returned = torch.ops.aten.clone.out(source, out=out)
+
+    assert returned is out
+    assert out.tag is tag
+
+
+@pytest.mark.parametrize(
+    ("make_out", "message"),
+    [
+        pytest.param(lambda: _Wrapper(torch.zeros(2, 3, dtype=torch.float64)), "dtype mismatch", id="dtype"),
+        pytest.param(lambda: _Wrapper(torch.zeros(2, 3, device="meta")), "device mismatch", id="device"),
+        pytest.param(
+            lambda: _Wrapper(torch.zeros(2, 3), layout=torch.sparse_coo),
+            "layout mismatch",
+            id="layout",
+        ),
+        pytest.param(
+            lambda: _Wrapper(torch.zeros(2, 3), outer_size=(3, 2), outer_stride=(2, 1)),
+            "shape mismatch",
+            id="shape",
+        ),
+        pytest.param(lambda: _Wrapper(torch.zeros(2, 3), outer_stride=(1, 2)), "stride mismatch", id="stride"),
+    ],
+)
+def test_clone_out_rejects_outer_attribute_mismatch(make_out: Callable[[], _Wrapper], message: str) -> None:
+    """Test that clone.out rejects mismatched outer attributes."""
+    source = _Wrapper(torch.arange(6, dtype=torch.float32).reshape(2, 3))
+
+    with pytest.raises(ValueError, match=message):
+        torch.ops.aten.clone.out(source, out=make_out())
+
+
+@pytest.mark.parametrize(
+    ("source_cls", "out_cls"),
+    [
+        pytest.param(_Wrapper, _WrapperSubclass, id="source-base"),
+        pytest.param(_WrapperSubclass, _Wrapper, id="out-base"),
+    ],
+)
+def test_clone_out_rejects_out_of_different_class(source_cls: type[_Wrapper], out_cls: type[_Wrapper]) -> None:
+    """Test that clone.out rejects a source and out of different wrapper classes."""
+    source = source_cls(torch.zeros(2, 3))
+    out = out_cls(torch.zeros(2, 3))
+
+    with pytest.raises(AssertionError, match="does not match"):
+        torch.ops.aten.clone.out(source, out=out)
+
+
+def test_clone_out_rejects_metadata_mismatch() -> None:
+    """Test that clone.out rejects unequal declared metadata."""
+    source = _Wrapper(torch.zeros(2, 3), tag="source")
+    out = _Wrapper(torch.zeros(2, 3), tag="out")
+
+    with pytest.raises(ValueError, match="metadata 'tag' differs"):
+        torch.ops.aten.clone.out(source, out=out)
+
+
+def test_clone_out_rejects_non_comparable_metadata() -> None:
+    """Test that clone.out rejects metadata that cannot be compared."""
+    source = _Wrapper(torch.zeros(2, 3), tag=_Uncomparable())
+    out = _Wrapper(torch.zeros(2, 3), tag=_Uncomparable())
+
+    with pytest.raises(ValueError, match="not equality-comparable"):
+        torch.ops.aten.clone.out(source, out=out)
+
+
+def test_clone_out_keeps_out_metadata_when_values_are_equal() -> None:
+    """Test that clone.out keeps out's metadata when it equals the source metadata."""
+    source_tag = ["source"]
+    out_tag = ["source"]
+    source = _Wrapper(torch.zeros(2, 3), tag=source_tag)
+    out = _Wrapper(torch.zeros(2, 3), tag=out_tag)
+
+    returned = torch.ops.aten.clone.out(source, out=out)
+
+    assert returned is out
+    assert out.tag is out_tag
+    assert out.tag is not source_tag
+
+
+def test_clone_out_rejects_alias_topology_mismatch() -> None:
+    """Test that clone.out rejects differing exact-object alias topologies."""
+    shared = torch.arange(6, dtype=torch.float32).reshape(2, 3)
+    source = _AliasWrapper(shared, shared)
+    out = _AliasWrapper(torch.zeros(2, 3), torch.zeros(2, 3))
+
+    with pytest.raises(ValueError, match="alias topology differs at field 'right'"):
+        torch.ops.aten.clone.out(source, out=out)
+
+
+def test_clone_out_rejects_nested_alias_topology_mismatch() -> None:
+    """Test that clone.out checks exact-object topology for nested wrappers."""
+    shared = _Wrapper(torch.arange(4, dtype=torch.float32))
+    source = _AliasWrapper(shared, shared)
+    out = _AliasWrapper(
+        _Wrapper(torch.zeros(4, dtype=torch.float32)),
+        _Wrapper(torch.zeros(4, dtype=torch.float32)),
+    )
+
+    with pytest.raises(ValueError, match="alias topology differs at field 'right'"):
+        torch.ops.aten.clone.out(source, out=out)
+
+
+def test_clone_out_accepts_matching_nested_alias_topology() -> None:
+    """Test that clone.out recursively copies a shared nested wrapper."""
+    source_nested = _Wrapper(torch.arange(4, dtype=torch.float32))
+    out_nested = _Wrapper(torch.zeros(4, dtype=torch.float32))
+    source = _AliasWrapper(source_nested, source_nested)
+    out = _AliasWrapper(out_nested, out_nested)
+
+    returned = torch.ops.aten.clone.out(source, out=out)
+
+    assert returned is out
+    assert out.left is out.right
+    assert torch.equal(out_nested.payload, source_nested.payload)
+
+
+def test_clone_out_accepts_matching_alias_topology() -> None:
+    """Test that clone.out accepts matching exact-object alias topologies."""
+    shared = torch.arange(6, dtype=torch.float32).reshape(2, 3)
+    out_left = torch.zeros(2, 3)
+    source = _AliasWrapper(shared, shared)
+    out = _AliasWrapper(out_left, out_left)
+
+    returned = torch.ops.aten.clone.out(source, out=out)
+
+    assert returned is out
+    assert out.left is out.right
+    assert torch.equal(out.left, shared)
+
+
+def test_clone_out_allows_distinct_views_sharing_storage() -> None:
+    """Test that clone.out does not inspect storage-level view aliasing."""
+    storage = torch.arange(4, dtype=torch.float32)
+    source = _AliasWrapper(storage[:2], storage[2:])
+    out_left = torch.zeros(2)
+    out_right = torch.zeros(2)
+    out = _AliasWrapper(out_left, out_right)
+
+    returned = torch.ops.aten.clone.out(source, out=out)
+
+    assert returned is out
+    assert out.left is out_left
+    assert out.right is out_right
+    assert torch.equal(out.left, storage[:2])
+    assert torch.equal(out.right, storage[2:])
+
+
+def test_clone_out_ignores_outer_storage_offset() -> None:
+    """Test that clone.out ignores the synthetic outer storage offset."""
+    left = torch.arange(4, dtype=torch.float32)
+    right = torch.ones(4)
+    source = _AliasWrapper(left, right, storage_offset=1)
+    out = _AliasWrapper(torch.zeros(4), torch.zeros(4), storage_offset=7)
+
+    returned = torch.ops.aten.clone.out(source, out=out)
+
+    assert returned is out
+    assert torch.equal(out.left, left)
+    assert torch.equal(out.right, right)
+
+
+def test_clone_out_forwards_memory_format_without_validating_outer_format() -> None:
+    """Test that clone.out forwards memory_format without validating outer memory format."""
+    inner = torch.arange(6, dtype=torch.float32).reshape(2, 3).t()
+    source = _Wrapper(inner)
+    out = _Wrapper(torch.zeros(2, 3).t())
+
+    returned = torch.ops.aten.clone.out(source, memory_format=torch.contiguous_format, out=out)
+
+    assert returned is out
+    assert torch.equal(out.payload, source.payload)
+
+
+def test_clone_out_handles_empty_wrapper() -> None:
+    """Test that clone.out handles a wrapper with no fields."""
+    source = _EmptyWrapper(outer_size=(2, 3), outer_stride=(3, 1))
+    out = _EmptyWrapper(outer_size=(2, 3), outer_stride=(3, 1))
+    version = out._version
+
+    returned = torch.ops.aten.clone.out(source, out=out)
+
+    assert returned is out
+    assert out._version == version + 1
