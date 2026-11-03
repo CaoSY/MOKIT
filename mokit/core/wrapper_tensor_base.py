@@ -534,19 +534,21 @@ class MokitWrapperTensorBase(MokitTensorBase):
             The rebuilt wrapper tensor.
 
         """
-        cls_inner_tensor = (inner_tensors[name] for name in cls.inner_tensor_names)
-        keyword_inner_tensors = {name: inner_tensors[name] for name in cls.keyword_inner_tensor_names}
-        cls_metadata = (metadata[name] for name in cls.metadata_names)
-        keyword_metadata = {name: metadata[name] for name in cls.keyword_metadata_names}
+        (
+            inner_tensor_values,
+            metadata_values,
+            keyword_inner_tensor_values,
+            keyword_metadata_values,
+        ) = cls._constructor_field_groups(inner_tensors, metadata)
 
         constructor = cast(Callable[..., Self], cls)
         return constructor(
-            *cls_inner_tensor,
-            *cls_metadata,
+            *inner_tensor_values,
+            *metadata_values,
             outer_size=outer_size,
             outer_stride=outer_stride,
-            **keyword_inner_tensors,
-            **keyword_metadata,
+            **keyword_inner_tensor_values,
+            **keyword_metadata_values,
         )
 
     def __repr__(self, *, tensor_contents: str | None = None) -> str:
@@ -895,6 +897,36 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         return ret_tensors
 
+    @classmethod
+    def _constructor_field_groups(
+        cls,
+        inner_tensors: Mapping[str, torch.Tensor | CustomClassBase],
+        metadata: Mapping[str, Any],
+    ) -> tuple[
+        tuple[torch.Tensor | CustomClassBase, ...],
+        tuple[Any, ...],
+        dict[str, torch.Tensor | CustomClassBase],
+        dict[str, Any],
+    ]:
+        """
+        Collect the four constructor field groups from flattened data.
+
+        Args:
+            inner_tensors: The inner tensors keyed by their flattened names.
+            metadata: The metadata mapping from ``__tensor_flatten__``.
+
+        Returns:
+            Positional inner tensors, positional metadata, keyword inner tensors, and
+            keyword metadata, in constructor-protocol order.
+
+        """
+        return (
+            tuple(inner_tensors[name] for name in cls.inner_tensor_names),
+            tuple(metadata[name] for name in cls.metadata_names),
+            {name: inner_tensors[name] for name in cls.keyword_inner_tensor_names},
+            {name: metadata[name] for name in cls.keyword_metadata_names},
+        )
+
 
 implements = MokitWrapperTensorBase.implements
 
@@ -1076,3 +1108,69 @@ def _[WrapperType: MokitWrapperTensorBase](
         )
 
     return out
+
+
+@implements(torch.ops.aten.alias.default, torch.ops.aten.detach.default)
+@unpack_args
+def _[WrapperType: MokitWrapperTensorBase](
+    cls: type[WrapperType],
+    func: OpOverload,
+    types: tuple[type[WrapperType]],
+    self: WrapperType,
+) -> WrapperType:
+    """
+    Create an alias or detach result for a wrapper tensor.
+
+    The outer wrapper shell is re-created by forwarding ``func`` to the shell as a
+    storage-free Tensor. The declared inner tensors are forwarded to ``func`` once per
+    object identity. Inner dispatch follows PyTorch's default behavior for operations
+    invoked inside ``__torch_dispatch__``: plain tensors share storage without
+    necessarily gaining view, version, or autograd metadata, while custom tensor
+    subclasses dispatch to their own handlers.
+
+    The shell is created with ``as_subclass`` while Python dispatch is disabled, which
+    bypasses ``__new__`` and ``__tensor_unflatten__``. The subclass ``__init__`` is then
+    called with the transformed inner tensors and the original metadata references,
+    allowing each wrapper class to finish its own Python initialization.
+
+    Args:
+        cls: Runtime wrapper class returned by the operation.
+        func: The ``aten.alias.default`` or ``aten.detach.default`` operator.
+        types: Participating dispatch types.
+        self: The wrapper receiving the operation.
+
+    Returns:
+        A new wrapper produced by forwarding ``func`` to the outer shell and inner
+        tensors, with declared metadata passed by reference.
+
+    Raises:
+        AssertionError: If assertions are enabled and ``cls`` does not match the runtime
+            class of ``self``.
+
+    """
+    assert type(self) is cls, (
+        f"{func}: dispatch cls={cls.__name__} does not match type(self)={type(self).__name__}; types={types}"
+    )
+
+    aliased = self._apply_fn_to_outer_tensor(func)
+
+    tensor_names, metadata = self.__tensor_flatten__()
+    inner_tensors = [getattr(self, name) for name in tensor_names]
+    aliased_inner_values = self._apply_fn_to_inner_tensors(
+        inner_tensors,
+        func,
+        per_id=True,
+    )
+    aliased_inner_tensors = dict(zip(tensor_names, aliased_inner_values, strict=True))
+
+    initializer = cast(Callable[..., None], aliased.__init__)
+    initializer(
+        *(aliased_inner_tensors[name] for name in cls.inner_tensor_names),
+        *(metadata[name] for name in cls.metadata_names),
+        outer_size=aliased.size(),
+        outer_stride=aliased.stride(),
+        **{name: aliased_inner_tensors[name] for name in cls.keyword_inner_tensor_names},
+        **{name: metadata[name] for name in cls.keyword_metadata_names},
+    )
+
+    return aliased
