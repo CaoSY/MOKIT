@@ -3130,6 +3130,195 @@ def test_torch_function_forwards_related_types() -> None:
     assert handler.calls[0][2] == (child, parent)
 
 
+# ------------------------------------------------------------------------------
+# _apply_fn_to_outer_tensor
+# ------------------------------------------------------------------------------
+
+
+_VIEW_OP_CASES = (
+    pytest.param(torch.ops.aten.alias.default, (), (2, 3), (3, 1), id="alias"),
+    pytest.param(torch.ops.aten.transpose.int, (0, 1), (3, 2), (1, 3), id="transpose"),
+    pytest.param(torch.ops.aten.t.default, (), (3, 2), (1, 3), id="t"),
+    pytest.param(torch.ops.aten.permute.default, ((1, 0),), (3, 2), (1, 3), id="permute"),
+    pytest.param(torch.ops.aten.movedim.int, (0, 1), (3, 2), (1, 3), id="movedim"),
+    pytest.param(torch.ops.aten.squeeze.default, (), (2, 3), (3, 1), id="squeeze"),
+    pytest.param(torch.ops.aten.unsqueeze.default, (0,), (1, 2, 3), (6, 3, 1), id="unsqueeze"),
+    pytest.param(torch.ops.aten.select.int, (0, 0), (3,), (1,), id="select"),
+    pytest.param(torch.ops.aten.slice.Tensor, (0, 0, 1, 1), (1, 3), (3, 1), id="slice"),
+    pytest.param(torch.ops.aten.narrow.default, (0, 0, 1), (1, 3), (3, 1), id="narrow"),
+    pytest.param(torch.ops.aten.diagonal.default, (0, 0, 1), (2,), (4,), id="diagonal"),
+    pytest.param(torch.ops.aten.expand.default, ((4, 2, 3),), (4, 2, 3), (0, 3, 1), id="expand"),
+    pytest.param(torch.ops.aten.flatten.using_ints, (0, 1), (6,), (1,), id="flatten"),
+    pytest.param(torch.ops.aten.unflatten.int, (0, (1, 2)), (1, 2, 3), (6, 3, 1), id="unflatten"),
+    pytest.param(torch.ops.aten.as_strided.default, ((3, 2), (1, 3), 0), (3, 2), (1, 3), id="as_strided"),
+    pytest.param(torch.ops.aten.reshape.default, ((6,),), (6,), (1,), id="reshape"),
+    pytest.param(torch.ops.aten.view.default, ((3, 2),), (3, 2), (2, 1), id="view"),
+)
+
+
+@pytest.mark.parametrize(("func", "args", "expected_shape", "expected_stride"), _VIEW_OP_CASES)
+def test_apply_fn_to_outer_tensor_applies_view_op_to_wrapper_shell(
+    func: OpOverload,
+    args: tuple[Any, ...],
+    expected_shape: tuple[int, ...],
+    expected_stride: tuple[int, ...],
+) -> None:
+    """Test that _apply_fn_to_outer_tensor applies metadata-only ops to the outer shell."""
+    wrapper = _Wrapper(torch.arange(6, dtype=torch.float32).reshape(2, 3))
+    version = wrapper._version
+
+    shell = wrapper._apply_fn_to_outer_tensor(func, *args)
+
+    assert type(shell) is _Wrapper
+    assert shell is not wrapper
+    assert shell._is_view()
+    assert shell._base is wrapper
+    assert shell.shape == expected_shape
+    assert shell.stride() == expected_stride
+    assert shell._version == version
+    assert vars(shell) == {}
+
+    torch._C._increment_version([wrapper])
+    assert shell._version == wrapper._version
+
+
+def test_apply_fn_to_outer_tensor_forwards_arguments() -> None:
+    """Test that _apply_fn_to_outer_tensor forwards positional and keyword arguments."""
+    wrapper = _Wrapper(torch.arange(6, dtype=torch.float32).reshape(2, 3))
+    calls: list[tuple[torch.Tensor, int, int, str]] = []
+
+    def view_fn(tensor: torch.Tensor, dim0: int, dim1: int, *, label: str) -> torch.Tensor:
+        """Record the call and transpose the tensor."""
+        calls.append((tensor, dim0, dim1, label))
+        return torch.ops.aten.transpose.int(tensor, dim0, dim1)
+
+    shell = wrapper._apply_fn_to_outer_tensor(view_fn, 0, 1, label="test")
+
+    assert len(calls) == 1
+    assert calls[0][0] is wrapper
+    assert calls[0][1:] == (0, 1, "test")
+    assert type(shell) is _Wrapper
+    assert shell.shape == (3, 2)
+    assert shell.stride() == (1, 3)
+
+
+# ------------------------------------------------------------------------------
+# _apply_fn_to_inner_tensors
+# ------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("func", "args", "expected_shape", "expected_stride"),
+    (
+        *_VIEW_OP_CASES,
+        pytest.param(torch.ops.aten.contiguous.default, (), (2, 3), (3, 1), id="contiguous"),
+        pytest.param(torch.ops.aten.clone.default, (), (2, 3), (3, 1), id="clone"),
+    ),
+)
+def test_apply_fn_to_inner_tensors_applies_op_to_each_tensor(
+    func: OpOverload,
+    args: tuple[Any, ...],
+    expected_shape: tuple[int, ...],
+    expected_stride: tuple[int, ...],
+) -> None:
+    """Test that _apply_fn_to_inner_tensors forwards ops to every tensor."""
+    tensors = [
+        torch.arange(6, dtype=torch.float32).reshape(2, 3),
+        torch.arange(6, 12, dtype=torch.float32).reshape(2, 3),
+    ]
+
+    results = MokitWrapperTensorBase._apply_fn_to_inner_tensors(tensors, func, *args)
+
+    assert len(results) == len(tensors)
+    for result in results:
+        assert result.shape == expected_shape
+        assert result.stride() == expected_stride
+
+
+def test_apply_fn_to_inner_tensors_maps_results_in_order() -> None:
+    """Test that _apply_fn_to_inner_tensors maps each tensor in order."""
+    tensors = [torch.tensor(1.0), torch.tensor(2.0), torch.tensor(3.0)]
+    calls: list[tuple[float, float, float]] = []
+
+    def transform(tensor: torch.Tensor, scale: float, *, offset: float) -> int:
+        """Record the tensor and return a scaled integer."""
+        calls.append((tensor.item(), scale, offset))
+        return int(tensor.item() * scale + offset)
+
+    results = MokitWrapperTensorBase._apply_fn_to_inner_tensors(
+        tensors,
+        transform,
+        2.0,
+        per_id=False,
+        offset=1.0,
+    )
+
+    assert results == [3, 5, 7]
+    assert calls == [(1.0, 2.0, 1.0), (2.0, 2.0, 1.0), (3.0, 2.0, 1.0)]
+
+
+def test_apply_fn_to_inner_tensors_deduplicates_by_identity() -> None:
+    """Test that _apply_fn_to_inner_tensors maps each shared object once."""
+    shared = torch.tensor([1.0])
+    other = torch.tensor([2.0])
+    other_result = object()
+    calls: list[torch.Tensor] = []
+
+    def transform(tensor: torch.Tensor) -> object | None:
+        """Record the call and return a distinct result per object."""
+        calls.append(tensor)
+        return None if tensor is shared else other_result
+
+    results = MokitWrapperTensorBase._apply_fn_to_inner_tensors([shared, shared, other], transform)
+
+    assert len(calls) == 2
+    assert calls[0] is shared
+    assert calls[1] is other
+    assert results == [None, None, other_result]
+
+
+def test_apply_fn_to_inner_tensors_maps_duplicates_when_per_id_is_false() -> None:
+    """Test that per_id=False invokes the callable once per input."""
+    shared = torch.tensor([1.0])
+    calls: list[torch.Tensor] = []
+
+    def transform(tensor: torch.Tensor) -> object:
+        """Record the call and return a fresh result."""
+        calls.append(tensor)
+        return object()
+
+    results = MokitWrapperTensorBase._apply_fn_to_inner_tensors([shared, shared], transform, per_id=False)
+
+    assert len(calls) == 2
+    assert calls[0] is shared
+    assert calls[1] is shared
+    assert results[0] is not results[1]
+
+
+def test_apply_fn_to_inner_tensors_handles_empty_sequence() -> None:
+    """Test that _apply_fn_to_inner_tensors returns an empty list for empty input."""
+
+    def transform(tensor: torch.Tensor) -> torch.Tensor:
+        """Return the tensor unchanged."""
+        return tensor
+
+    tensors: list[torch.Tensor] = []
+
+    assert MokitWrapperTensorBase._apply_fn_to_inner_tensors(tensors, transform) == []
+    assert MokitWrapperTensorBase._apply_fn_to_inner_tensors(tensors, transform, per_id=False) == []
+
+
+def test_apply_fn_to_inner_tensors_propagates_exception() -> None:
+    """Test that _apply_fn_to_inner_tensors propagates errors from the callable."""
+
+    def transform(tensor: torch.Tensor) -> torch.Tensor:
+        """Raise an error."""
+        raise ValueError("transform failed")
+
+    with pytest.raises(ValueError, match="transform failed"):
+        MokitWrapperTensorBase._apply_fn_to_inner_tensors([torch.tensor(1.0)], transform, per_id=False)
+
+
 # ==============================================================================
 # Clone handlers
 # ==============================================================================

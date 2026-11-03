@@ -816,6 +816,85 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         return decorator
 
+    def _apply_fn_to_outer_tensor(
+        self: Self,
+        func: OpOverload | Callable[..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> Self:
+        """
+        Apply a metadata-only operator to the outer tensor shell.
+
+        The operator runs with Python dispatch disabled, so it receives the wrapper as a
+        storage-free Tensor instead of re-entering this dispatcher. The result is retyped
+        to the wrapper class. Only view and metadata operators are supported;
+        data-dependent operators must not use this method because the outer shell has no
+        storage.
+
+        Args:
+            func: The metadata-only operator to apply.
+            *args: Positional operator arguments.
+            **kwargs: Keyword operator arguments.
+
+        Returns:
+            The wrapper-class shell produced by the operator.
+
+        Raises:
+            RuntimeError: If the operator rejects a storage-free Tensor.
+
+        """
+        cls = type(self)
+        with torch._C._DisableTorchDispatch():
+            result = func(self, *args, **kwargs)
+            if type(result) is not cls:
+                result = result.as_subclass(cls)
+
+        return result
+
+    @staticmethod
+    def _apply_fn_to_inner_tensors[ResultType](
+        inner_tensors: Sequence[torch.Tensor | CustomClassBase],
+        func: Callable[..., ResultType],
+        *args: Any,
+        per_id: bool = True,
+        **kwargs: Any,
+    ) -> list[ResultType]:
+        """
+        Apply a callable to each inner tensor and return the results in order.
+
+        The design purpose of this helper is to forward ``func`` to a wrapper's inner
+        tensors and return a list of new inner tensors, making handler implementations
+        concise. It can be used more broadly as a map over a sequence, but callers retain
+        responsibility for the operator's dispatch, autograd, and storage semantics.
+
+        When ``per_id`` is true, inputs with the same object identity share one result;
+        otherwise ``func`` is invoked once per input. The output order matches the input
+        order.
+
+        Args:
+            inner_tensors: The inner tensors to transform.
+            func: The callable applied to each inner tensor.
+            *args: Positional arguments forwarded to ``func``.
+            per_id: Whether to deduplicate results by input object identity.
+            **kwargs: Keyword arguments forwarded to ``func``.
+
+        Returns:
+            The transformed values in the same order as ``inner_tensors``.
+
+        """
+        if per_id is True:
+            id_tensor: dict[int, ResultType] = {}
+            ret_tensors: list[ResultType] = []
+            for tensor in inner_tensors:
+                tensor_id = id(tensor)
+                if tensor_id not in id_tensor:
+                    id_tensor[tensor_id] = func(tensor, *args, **kwargs)
+                ret_tensors.append(id_tensor[tensor_id])
+        else:
+            ret_tensors = [func(tensor, *args, **kwargs) for tensor in inner_tensors]
+
+        return ret_tensors
+
 
 implements = MokitWrapperTensorBase.implements
 
