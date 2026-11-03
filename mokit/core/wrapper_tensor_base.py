@@ -944,17 +944,14 @@ def _[WrapperType: MokitWrapperTensorBase](
 
     tensor_names, metadata = self.__tensor_flatten__()
 
-    id_cloned_tensor: dict[int, torch.Tensor] = {}
-    cloned_inner_tensors: dict[str, torch.Tensor] = {}
-
-    for name in tensor_names:
-        tensor: torch.Tensor = getattr(self, name)
-        tensor_id: int = id(tensor)
-
-        if tensor_id not in id_cloned_tensor:
-            id_cloned_tensor[tensor_id] = func(tensor, memory_format=memory_format)
-
-        cloned_inner_tensors[name] = id_cloned_tensor[tensor_id]
+    inner_tensors = [getattr(self, name) for name in tensor_names]
+    cloned_inner_tensor_values = self._apply_fn_to_inner_tensors(
+        inner_tensors,
+        func,
+        per_id=True,
+        memory_format=memory_format,
+    )
+    cloned_inner_tensors = dict(zip(tensor_names, cloned_inner_tensor_values, strict=True))
 
     outer_size = self.size()
 
