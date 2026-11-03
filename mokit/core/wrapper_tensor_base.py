@@ -1163,14 +1163,21 @@ def _[WrapperType: MokitWrapperTensorBase](
     )
     aliased_inner_tensors = dict(zip(tensor_names, aliased_inner_values, strict=True))
 
+    (
+        inner_tensor_values,
+        metadata_values,
+        keyword_inner_tensor_values,
+        keyword_metadata_values,
+    ) = cls._constructor_field_groups(aliased_inner_tensors, metadata)
+
     initializer = cast(Callable[..., None], aliased.__init__)
     initializer(
-        *(aliased_inner_tensors[name] for name in cls.inner_tensor_names),
-        *(metadata[name] for name in cls.metadata_names),
+        *inner_tensor_values,
+        *metadata_values,
         outer_size=aliased.size(),
         outer_stride=aliased.stride(),
-        **{name: aliased_inner_tensors[name] for name in cls.keyword_inner_tensor_names},
-        **{name: metadata[name] for name in cls.keyword_metadata_names},
+        **keyword_inner_tensor_values,
+        **keyword_metadata_values,
     )
 
     return aliased
