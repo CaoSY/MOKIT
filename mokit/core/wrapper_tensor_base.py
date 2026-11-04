@@ -509,8 +509,8 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         """
         cls = type(self)
-        tensor_names = (*cls.inner_tensor_names, *cls.keyword_inner_tensor_names)
-        metadata = {name: getattr(self, name) for name in (*cls.metadata_names, *cls.keyword_metadata_names)}
+        tensor_names = cls._inner_tensor_names()
+        metadata = {name: getattr(self, name) for name in cls._metadata_names()}
         return tensor_names, metadata
 
     @classmethod
@@ -818,6 +818,36 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         return decorator
 
+    @classmethod
+    def _inner_tensor_names(cls: type[Self]) -> tuple[str, ...]:
+        """
+        Return the inner tensor field names in authoritative flatten order.
+
+        The order is positional ``inner_tensor_names`` followed by
+        ``keyword_inner_tensor_names``. Flattening, field aliasing checks, and constructor
+        argument assembly use this order.
+
+        Returns:
+            The flattened inner tensor field names.
+
+        """
+        return (*cls.inner_tensor_names, *cls.keyword_inner_tensor_names)
+
+    @classmethod
+    def _metadata_names(cls: type[Self]) -> tuple[str, ...]:
+        """
+        Return the metadata field names in authoritative flatten order.
+
+        The order is positional ``metadata_names`` followed by
+        ``keyword_metadata_names``. Flattening and constructor argument assembly use this
+        order.
+
+        Returns:
+            The flattened metadata field names.
+
+        """
+        return (*cls.metadata_names, *cls.keyword_metadata_names)
+
     def _apply_fn_to_outer_tensor(
         self: Self,
         func: OpOverload | Callable[..., Any],
@@ -984,21 +1014,20 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         cls = type(self)
 
-        for cls_attr_name in ("metadata_names", "keyword_metadata_names"):
-            for name in getattr(cls, cls_attr_name):
-                self_value = getattr(self, name)
-                other_value = getattr(other, name)
+        for name in cls._metadata_names():
+            self_value = getattr(self, name)
+            other_value = getattr(other, name)
 
-                if self_value is other_value:
-                    continue
+            if self_value is other_value:
+                continue
 
-                try:
-                    equal = bool(self_value == other_value)
-                except Exception as exc:
-                    raise ValueError(f"metadata {name!r} is not equality-comparable") from exc
+            try:
+                equal = bool(self_value == other_value)
+            except Exception as exc:
+                raise ValueError(f"metadata {name!r} is not equality-comparable") from exc
 
-                if not equal:
-                    return mismatch(name, self_value, other_value, kind="metadata")
+            if not equal:
+                return mismatch(name, self_value, other_value, kind="metadata")
 
         return True
 
@@ -1033,11 +1062,9 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         cls = type(self)
 
-        tensor_names = (*cls.inner_tensor_names, *cls.keyword_inner_tensor_names)
-
         self_first_occurrence: dict[int, int] = {}
         other_first_occurrence: dict[int, int] = {}
-        for index, name in enumerate(tensor_names):
+        for index, name in enumerate(cls._inner_tensor_names()):
             self_index = self_first_occurrence.setdefault(id(getattr(self, name)), index)
             other_index = other_first_occurrence.setdefault(id(getattr(other, name)), index)
 
@@ -1181,7 +1208,7 @@ def _[WrapperType: MokitWrapperTensorBase](
     self._has_same_attributes(out, strict=True, raise_on_mismatch=True)
     self._has_same_tensor_field_aliasing(out, raise_on_mismatch=True)
 
-    tensor_names, _ = self.__tensor_flatten__()
+    tensor_names = cls._inner_tensor_names()
 
     self_first_occurrence: dict[int, int] = {}
     for index, name in enumerate(tensor_names):
