@@ -4074,3 +4074,149 @@ def test_detach_default_rejects_dispatch_class_mismatch() -> None:
 
     with pytest.raises(AssertionError, match="does not match type"):
         handler(_WrapperSubclass, torch.ops.aten.detach.default, (type(wrapper),), (wrapper,), {})
+
+
+# ==============================================================================
+# aten.copy_
+# ==============================================================================
+
+
+def test_copy_copies_inner_tensors_in_place() -> None:
+    """Test that copy_ overwrites inner tensors and returns the destination."""
+    source = _Wrapper(
+        torch.arange(6, dtype=torch.float32).reshape(2, 3),
+        bias=torch.ones(2, 3),
+    )
+    destination = _Wrapper(torch.zeros(2, 3))
+    payload = destination.payload
+    bias = destination.bias
+    version = destination._version
+
+    returned = torch.ops.aten.copy_.default(destination, source)
+
+    assert returned is destination
+    assert destination.payload is payload
+    assert destination.bias is bias
+    assert torch.equal(destination.payload, source.payload)
+    assert torch.equal(destination.bias, source.bias)
+    assert destination._version == version + 1
+
+
+def test_copy_preserves_destination_metadata() -> None:
+    """Test that copy_ retains the destination's metadata references."""
+    source_tag = ["source"]
+    destination_tag = ["source"]
+    source = _Wrapper(torch.arange(4, dtype=torch.float32), tag=source_tag)
+    destination = _Wrapper(torch.zeros(4, dtype=torch.float32), tag=destination_tag)
+
+    torch.ops.aten.copy_.default(destination, source)
+
+    assert destination.tag is destination_tag
+    assert destination.tag is not source_tag
+
+
+def test_copy_accepts_matching_alias_groups() -> None:
+    """Test that copy_ copies through matching shared-tensor groups."""
+    shared = torch.arange(6, dtype=torch.float32).reshape(2, 3)
+    source = _AliasWrapper(shared, shared)
+    out_left = torch.zeros(2, 3)
+    destination = _AliasWrapper(out_left, out_left)
+
+    torch.ops.aten.copy_.default(destination, source)
+
+    assert destination.left is destination.right
+    assert torch.equal(destination.left, shared)
+
+
+def test_copy_recursively_updates_nested_wrapper_in_place() -> None:
+    """Test that copy_ recursively updates a nested wrapper's inner tensors."""
+    nested_source = _Wrapper(torch.arange(4, dtype=torch.float32))
+    source = _Wrapper(nested_source, bias=torch.ones(4, dtype=torch.float32))
+    nested_destination = _Wrapper(torch.full((4,), -1.0, dtype=torch.float32))
+    destination = _Wrapper(nested_destination, bias=torch.zeros(4, dtype=torch.float32))
+    nested_payload = nested_destination.payload
+
+    returned = torch.ops.aten.copy_.default(destination, source)
+
+    assert returned is destination
+    assert destination.payload is nested_destination
+    assert nested_destination.payload is nested_payload
+    assert torch.equal(nested_destination.payload, nested_source.payload)
+    assert torch.equal(destination.bias, source.bias)
+
+
+def test_copy_rejects_alias_group_mismatch() -> None:
+    """Test that copy_ rejects differing field alias groups."""
+    shared = torch.arange(6, dtype=torch.float32).reshape(2, 3)
+    source = _AliasWrapper(shared, shared)
+    destination = _AliasWrapper(torch.zeros(2, 3), torch.zeros(2, 3))
+
+    with pytest.raises(ValueError, match="field aliasing differs"):
+        torch.ops.aten.copy_.default(destination, source)
+
+
+@pytest.mark.parametrize(
+    ("make_destination", "message"),
+    [
+        pytest.param(
+            lambda: _Wrapper(torch.zeros(2, 3, dtype=torch.float64)),
+            "dtype mismatch",
+            id="dtype",
+        ),
+        pytest.param(
+            lambda: _Wrapper(torch.zeros(2, 3, device="meta")),
+            "device mismatch",
+            id="device",
+        ),
+        pytest.param(
+            lambda: _Wrapper(torch.zeros(2, 3), layout=torch.sparse_coo),
+            "layout mismatch",
+            id="layout",
+        ),
+        pytest.param(
+            lambda: _Wrapper(torch.zeros(2, 3), outer_size=(3, 2), outer_stride=(2, 1)),
+            "shape mismatch",
+            id="shape",
+        ),
+        pytest.param(
+            lambda: _Wrapper(torch.zeros(2, 3), outer_stride=(1, 2)),
+            "stride mismatch",
+            id="stride",
+        ),
+    ],
+)
+def test_copy_rejects_outer_attribute_mismatch(
+    make_destination: Callable[[], _Wrapper],
+    message: str,
+) -> None:
+    """Test that copy_ rejects mismatched outer attributes."""
+    source = _Wrapper(torch.arange(6, dtype=torch.float32).reshape(2, 3))
+
+    with pytest.raises(ValueError, match=message):
+        torch.ops.aten.copy_.default(make_destination(), source)
+
+
+def test_copy_rejects_metadata_mismatch() -> None:
+    """Test that copy_ rejects unequal declared metadata."""
+    source = _Wrapper(torch.zeros(2, 3), tag="source")
+    destination = _Wrapper(torch.zeros(2, 3), tag="destination")
+
+    with pytest.raises(ValueError, match="metadata 'tag' mismatch"):
+        torch.ops.aten.copy_.default(destination, source)
+
+
+def test_copy_rejects_different_source_class() -> None:
+    """Test that copy_ rejects a source of a different wrapper class."""
+    source = _WrapperSubclass(torch.zeros(2, 3))
+    destination = _Wrapper(torch.zeros(2, 3))
+
+    with pytest.raises(AssertionError, match="does not match type"):
+        torch.ops.aten.copy_.default(destination, source)
+
+
+def test_copy_rejects_plain_tensor_source() -> None:
+    """Test that copy_ rejects a plain tensor source."""
+    destination = _Wrapper(torch.zeros(2, 3))
+
+    with pytest.raises(ValueError, match="type mismatch"):
+        torch.ops.aten.copy_.default(destination, torch.zeros(2, 3))

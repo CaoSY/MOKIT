@@ -1266,3 +1266,62 @@ def _[WrapperType: MokitWrapperTensorBase](
     )
 
     return aliased
+
+
+@implements(torch.ops.aten.copy_.default)
+@unpack_args
+def _[WrapperType: MokitWrapperTensorBase](
+    cls: type[WrapperType],
+    func: OpOverload,
+    types: tuple[type[WrapperType]],
+    self: WrapperType,
+    src: WrapperType,
+    non_blocking: bool = False,
+) -> WrapperType:
+    """
+    Copy a source wrapper into an existing wrapper in place.
+
+    Both wrappers must have the same runtime class. Outer dtype, device, layout,
+    shape, stride, declared metadata, and inner tensor field aliasing must match.
+    Inner tensors are copied in place through ``aten.copy_`` once per alias group.
+
+    The scalar-fill overloads ``copy_.int`` and ``copy_.float`` are not handled;
+    filling a wrapper representation with one scalar is subclass-specific.
+
+    Args:
+        cls: Runtime wrapper class shared by the source and destination.
+        func: The ``aten.copy_.default`` operator.
+        types: Participating dispatch types.
+        self: The destination wrapper.
+        src: The source wrapper.
+        non_blocking: Whether to forward the asynchronous-copy hint.
+
+    Returns:
+        The destination wrapper, ``self``.
+
+    Raises:
+        AssertionError: If assertions are enabled and ``cls`` does not match the runtime
+            class of ``self``.
+        ValueError: If the wrappers have different runtime classes, outer attributes,
+            declared metadata, or inner tensor field aliasing.
+
+    """
+    assert type(self) is cls, (
+        f"{func}: dispatch cls={cls.__name__} does not match type(self)={type(self).__name__}; types={types}"
+    )
+
+    self._has_same_attributes(src, strict=True, raise_on_mismatch=True)
+
+    field_aliasing_group = src._tensor_field_aliasing_group()
+    self._has_same_tensor_field_aliasing(
+        field_aliasing_group,
+        raise_on_mismatch=True,
+    )
+
+    apply_fn(
+        [getattr(src, group[0]) for group in field_aliasing_group],
+        lambda source, *, dest: func(dest, source, non_blocking=non_blocking),
+        dest=[getattr(self, group[0]) for group in field_aliasing_group],
+    )
+
+    return self
