@@ -934,8 +934,26 @@ class MokitWrapperTensorBase(MokitTensorBase):
         strict: bool = True,
         raise_on_mismatch: bool = False,
     ) -> bool:
+        """
+        Compare declared metadata and, optionally, native tensor attributes.
+
+        Args:
+            other: The wrapper to compare against.
+            strict: Whether to compare native dtype, device, layout, shape, and stride
+                in addition to declared metadata.
+            raise_on_mismatch: Whether to raise at the first mismatch instead of returning
+                False.
+
+        Returns:
+            Whether the selected attributes and metadata match.
+
+        Raises:
+            ValueError: If the wrappers have different runtime classes, if metadata
+                equality fails, or if ``raise_on_mismatch`` is true and a value differs.
+
+        """
         if type(self) is not type(other):
-            raise ValueError
+            raise ValueError(f"type mismatch: self={type(self).__name__}, other={type(other).__name__}")
 
         def mismatch(
             field: str,
@@ -944,6 +962,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
             *,
             kind: str | None = None,
         ) -> bool:
+            """Raise or return False for the current mismatch."""
             if raise_on_mismatch:
                 label = f"{kind} {field!r}" if kind is not None else field
                 raise ValueError(f"{label} mismatch: self={self_value!r}, other={other_value!r}")
