@@ -3203,120 +3203,87 @@ def test_apply_fn_to_outer_tensor_forwards_arguments() -> None:
 
 
 # ------------------------------------------------------------------------------
-# _apply_fn_to_inner_tensors
+# _tensor_field_aliasing_group
 # ------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("func", "args", "expected_shape", "expected_stride"),
-    (
-        *_VIEW_OP_CASES,
-        pytest.param(torch.ops.aten.contiguous.default, (), (2, 3), (3, 1), id="contiguous"),
-        pytest.param(torch.ops.aten.clone.default, (), (2, 3), (3, 1), id="clone"),
-    ),
-)
-def test_apply_fn_to_inner_tensors_applies_op_to_each_tensor(
-    func: OpOverload,
-    args: tuple[Any, ...],
-    expected_shape: tuple[int, ...],
-    expected_stride: tuple[int, ...],
-) -> None:
-    """Test that _apply_fn_to_inner_tensors forwards ops to every tensor."""
-    tensors = [
-        torch.arange(6, dtype=torch.float32).reshape(2, 3),
-        torch.arange(6, 12, dtype=torch.float32).reshape(2, 3),
-    ]
+def test_tensor_field_aliasing_group_groups_shared_tensors() -> None:
+    """Test that shared inner tensors are grouped by object identity."""
+    shared = torch.arange(4, dtype=torch.float32)
+    wrapper = _Wrapper(shared, bias=shared)
 
-    results = MokitWrapperTensorBase._apply_fn_to_inner_tensors(tensors, func, *args)
-
-    assert len(results) == len(tensors)
-    for result in results:
-        assert result.shape == expected_shape
-        assert result.stride() == expected_stride
+    assert wrapper._tensor_field_aliasing_group() == (("payload", "bias"),)
 
 
-def test_apply_fn_to_inner_tensors_maps_results_in_order() -> None:
-    """Test that _apply_fn_to_inner_tensors maps each tensor in order."""
-    tensors = [torch.tensor(1.0), torch.tensor(2.0), torch.tensor(3.0)]
-    calls: list[tuple[float, float, float]] = []
+def test_tensor_field_aliasing_group_orders_distinct_groups_by_first_occurrence() -> None:
+    """Test that distinct inner tensors form groups in field order."""
+    payload = torch.arange(4, dtype=torch.float32)
+    bias = torch.ones(4, dtype=torch.float32)
+    wrapper = _Wrapper(payload, bias=bias)
 
-    def transform(tensor: torch.Tensor, scale: float, *, offset: float) -> int:
-        """Record the tensor and return a scaled integer."""
-        calls.append((tensor.item(), scale, offset))
-        return int(tensor.item() * scale + offset)
+    assert wrapper._tensor_field_aliasing_group() == (("payload",), ("bias",))
 
-    results = MokitWrapperTensorBase._apply_fn_to_inner_tensors(
-        tensors,
-        transform,
-        2.0,
-        per_id=False,
-        offset=1.0,
+
+def test_tensor_field_aliasing_group_handles_empty_wrapper() -> None:
+    """Test that an empty wrapper has no aliasing groups."""
+    assert _EmptyWrapper()._tensor_field_aliasing_group() == ()
+
+
+# ------------------------------------------------------------------------------
+# _has_same_tensor_field_aliasing
+# ------------------------------------------------------------------------------
+
+
+def test_has_same_tensor_field_aliasing_accepts_matching_groups() -> None:
+    """Test that matching group structures are accepted."""
+    source = _AliasWrapper(
+        torch.arange(4, dtype=torch.float32),
+        torch.arange(4, dtype=torch.float32),
+    )
+    target = _AliasWrapper(
+        torch.ones(4, dtype=torch.float32),
+        torch.ones(4, dtype=torch.float32),
     )
 
-    assert results == [3, 5, 7]
-    assert calls == [(1.0, 2.0, 1.0), (2.0, 2.0, 1.0), (3.0, 2.0, 1.0)]
+    assert target._has_same_tensor_field_aliasing(source._tensor_field_aliasing_group())
 
 
-def test_apply_fn_to_inner_tensors_deduplicates_by_identity() -> None:
-    """Test that _apply_fn_to_inner_tensors maps each shared object once."""
-    shared = torch.tensor([1.0])
-    other = torch.tensor([2.0])
-    other_result = object()
-    calls: list[torch.Tensor] = []
+def test_has_same_tensor_field_aliasing_accepts_matching_shared_groups() -> None:
+    """Test that matching shared-tensor groups are accepted."""
+    source_shared = torch.arange(4, dtype=torch.float32)
+    target_shared = torch.ones(4, dtype=torch.float32)
+    source = _AliasWrapper(source_shared, source_shared)
+    target = _AliasWrapper(target_shared, target_shared)
 
-    def transform(tensor: torch.Tensor) -> object | None:
-        """Record the call and return a distinct result per object."""
-        calls.append(tensor)
-        return None if tensor is shared else other_result
-
-    results = MokitWrapperTensorBase._apply_fn_to_inner_tensors([shared, shared, other], transform)
-
-    assert len(calls) == 2
-    assert calls[0] is shared
-    assert calls[1] is other
-    assert results == [None, None, other_result]
+    assert target._has_same_tensor_field_aliasing(source._tensor_field_aliasing_group())
 
 
-def test_apply_fn_to_inner_tensors_maps_duplicates_when_per_id_is_false() -> None:
-    """Test that per_id=False invokes the callable once per input."""
-    shared = torch.tensor([1.0])
-    calls: list[torch.Tensor] = []
+def test_has_same_tensor_field_aliasing_rejects_mismatch_without_raising() -> None:
+    """Test that a mismatch returns False when errors are disabled."""
+    shared = torch.arange(4, dtype=torch.float32)
+    source = _AliasWrapper(shared, shared)
+    target = _AliasWrapper(
+        torch.arange(4, dtype=torch.float32),
+        torch.ones(4, dtype=torch.float32),
+    )
 
-    def transform(tensor: torch.Tensor) -> object:
-        """Record the call and return a fresh result."""
-        calls.append(tensor)
-        return object()
-
-    results = MokitWrapperTensorBase._apply_fn_to_inner_tensors([shared, shared], transform, per_id=False)
-
-    assert len(calls) == 2
-    assert calls[0] is shared
-    assert calls[1] is shared
-    assert results[0] is not results[1]
+    assert not target._has_same_tensor_field_aliasing(source._tensor_field_aliasing_group())
 
 
-def test_apply_fn_to_inner_tensors_handles_empty_sequence() -> None:
-    """Test that _apply_fn_to_inner_tensors returns an empty list for empty input."""
+def test_has_same_tensor_field_aliasing_raises_on_mismatch() -> None:
+    """Test that a mismatch raises with both alias groups."""
+    shared = torch.arange(4, dtype=torch.float32)
+    source = _AliasWrapper(shared, shared)
+    target = _AliasWrapper(
+        torch.arange(4, dtype=torch.float32),
+        torch.ones(4, dtype=torch.float32),
+    )
 
-    def transform(tensor: torch.Tensor) -> torch.Tensor:
-        """Return the tensor unchanged."""
-        return tensor
-
-    tensors: list[torch.Tensor] = []
-
-    assert MokitWrapperTensorBase._apply_fn_to_inner_tensors(tensors, transform) == []
-    assert MokitWrapperTensorBase._apply_fn_to_inner_tensors(tensors, transform, per_id=False) == []
-
-
-def test_apply_fn_to_inner_tensors_propagates_exception() -> None:
-    """Test that _apply_fn_to_inner_tensors propagates errors from the callable."""
-
-    def transform(tensor: torch.Tensor) -> torch.Tensor:
-        """Raise an error."""
-        raise ValueError("transform failed")
-
-    with pytest.raises(ValueError, match="transform failed"):
-        MokitWrapperTensorBase._apply_fn_to_inner_tensors([torch.tensor(1.0)], transform, per_id=False)
+    with pytest.raises(ValueError, match="field aliasing differs"):
+        target._has_same_tensor_field_aliasing(
+            source._tensor_field_aliasing_group(),
+            raise_on_mismatch=True,
+        )
 
 
 # ==============================================================================
@@ -3669,7 +3636,7 @@ def test_clone_out_rejects_alias_topology_mismatch() -> None:
     source = _AliasWrapper(shared, shared)
     out = _AliasWrapper(torch.zeros(2, 3), torch.zeros(2, 3))
 
-    with pytest.raises(ValueError, match="field aliasing differs at field 'right'"):
+    with pytest.raises(ValueError, match="field aliasing differs"):
         torch.ops.aten.clone.out(source, out=out)
 
 
@@ -3682,7 +3649,7 @@ def test_clone_out_rejects_nested_alias_topology_mismatch() -> None:
         _Wrapper(torch.zeros(4, dtype=torch.float32)),
     )
 
-    with pytest.raises(ValueError, match="field aliasing differs at field 'right'"):
+    with pytest.raises(ValueError, match="field aliasing differs"):
         torch.ops.aten.clone.out(source, out=out)
 
 

@@ -13,6 +13,7 @@ from torch._custom_class_base import CustomClassBase
 from torch._ops import OpOverload
 
 from mokit.core import MokitTensorBase
+from mokit.utils import apply_fn
 
 
 class HandlerProtocol[
@@ -883,50 +884,6 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         return result
 
-    @staticmethod
-    def _apply_fn_to_inner_tensors[ResultType](
-        inner_tensors: Sequence[torch.Tensor | CustomClassBase],
-        func: Callable[..., ResultType],
-        *args: Any,
-        per_id: bool = True,
-        **kwargs: Any,
-    ) -> list[ResultType]:
-        """
-        Apply a callable to each inner tensor and return the results in order.
-
-        The design purpose of this helper is to forward ``func`` to a wrapper's inner
-        tensors and return a list of new inner tensors, making handler implementations
-        concise. It can be used more broadly as a map over a sequence, but callers retain
-        responsibility for the operator's dispatch, autograd, and storage semantics.
-
-        When ``per_id`` is true, inputs with the same object identity share one result;
-        otherwise ``func`` is invoked once per input. The output order matches the input
-        order.
-
-        Args:
-            inner_tensors: The inner tensors to transform.
-            func: The callable applied to each inner tensor.
-            *args: Positional arguments forwarded to ``func``.
-            per_id: Whether to deduplicate results by input object identity.
-            **kwargs: Keyword arguments forwarded to ``func``.
-
-        Returns:
-            The transformed values in the same order as ``inner_tensors``.
-
-        """
-        if per_id is True:
-            id_tensor: dict[int, ResultType] = {}
-            ret_tensors: list[ResultType] = []
-            for tensor in inner_tensors:
-                tensor_id = id(tensor)
-                if tensor_id not in id_tensor:
-                    id_tensor[tensor_id] = func(tensor, *args, **kwargs)
-                ret_tensors.append(id_tensor[tensor_id])
-        else:
-            ret_tensors = [func(tensor, *args, **kwargs) for tensor in inner_tensors]
-
-        return ret_tensors
-
     @classmethod
     def _constructor_field_groups(
         cls,
@@ -1031,50 +988,59 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         return True
 
+    def _tensor_field_aliasing_group(self) -> tuple[tuple[str, ...], ...]:
+        """
+        Group inner tensor field names by exact object identity.
+
+        Returns:
+            Field-name groups ordered by first occurrence. Names within each group follow
+            the authoritative flattened field order.
+
+        """
+        groups: dict[int, list[str]] = {}
+
+        for name in type(self)._inner_tensor_names():
+            # Python guarantees dict insertion order:
+            # https://docs.python.org/3/library/stdtypes.html#typesmapping
+            # so groups are ordered by the first field that references each tensor object.
+            groups.setdefault(id(getattr(self, name)), []).append(name)
+
+        return tuple(tuple(names) for names in groups.values())
+
     def _has_same_tensor_field_aliasing(
         self: Self,
-        other: Self,
+        field_aliasing_group: tuple[tuple[str, ...], ...],
         *,
         raise_on_mismatch: bool = False,
     ) -> bool:
         """
-        Compare exact-object aliasing of the declared inner tensor fields.
+        Compare exact-object aliasing against the given field aliasing groups.
 
-        Field names are grouped by the identity of the tensor they reference. The wrappers
+        Field names are grouped by the identity of the tensor they reference. The groups
         match only when corresponding fields produce identical first-occurrence groups.
         Storage-level view aliasing is not examined.
 
         Args:
-            other: The wrapper to compare against.
+            field_aliasing_group: The field aliasing groups to compare against.
             raise_on_mismatch: Whether to raise at the first mismatch instead of returning
                 False.
 
         Returns:
-            Whether both wrappers group their inner tensor fields identically.
+            Whether this wrapper groups its inner tensor fields identically.
 
         Raises:
-            ValueError: If the wrappers have different runtime classes, or if
-                ``raise_on_mismatch`` is true and a field group differs.
+            ValueError: If ``raise_on_mismatch`` is true and a field group differs.
 
         """
-        if type(self) is not type(other):
-            raise ValueError(f"type mismatch: self={type(self).__name__}, other={type(other).__name__}")
+        self_group = self._tensor_field_aliasing_group()
 
-        cls = type(self)
+        if self_group == field_aliasing_group:
+            return True
 
-        self_first_occurrence: dict[int, int] = {}
-        other_first_occurrence: dict[int, int] = {}
-        for index, name in enumerate(cls._inner_tensor_names()):
-            self_index = self_first_occurrence.setdefault(id(getattr(self, name)), index)
-            other_index = other_first_occurrence.setdefault(id(getattr(other, name)), index)
+        if not raise_on_mismatch:
+            return False
 
-            if self_index != other_index:
-                if raise_on_mismatch:
-                    raise ValueError(f"field aliasing differs at field {name!r}")
-                else:
-                    return False
-
-        return True
+        raise ValueError(f"field aliasing differs: self={self_group!r}, given={field_aliasing_group!r}")
 
 
 implements = MokitWrapperTensorBase.implements
@@ -1123,16 +1089,19 @@ def _[WrapperType: MokitWrapperTensorBase](
         f"{func}: dispatch cls={cls.__name__} does not match type(self)={type(self).__name__}; types={types}"
     )
 
-    tensor_names, metadata = self.__tensor_flatten__()
+    _, metadata = self.__tensor_flatten__()
 
-    inner_tensors = [getattr(self, name) for name in tensor_names]
-    cloned_inner_tensor_values = self._apply_fn_to_inner_tensors(
-        inner_tensors,
+    groups = self._tensor_field_aliasing_group()
+    cloned_inner_tensor_values = apply_fn(
+        [getattr(self, group[0]) for group in groups],
         func,
-        per_id=True,
         memory_format=memory_format,
     )
-    cloned_inner_tensors = dict(zip(tensor_names, cloned_inner_tensor_values, strict=True))
+
+    cloned_inner_tensors: dict[str, torch.Tensor] = {}
+    for group, cloned in zip(groups, cloned_inner_tensor_values, strict=True):
+        for name in group:
+            cloned_inner_tensors[name] = cloned
 
     outer_size = self.size()
 
@@ -1206,21 +1175,18 @@ def _[WrapperType: MokitWrapperTensorBase](
     assert type(out) is cls, f"{func}: out type={type(out).__name__} does not match dispatch cls={cls.__name__}"
 
     self._has_same_attributes(out, strict=True, raise_on_mismatch=True)
-    self._has_same_tensor_field_aliasing(out, raise_on_mismatch=True)
 
-    tensor_names = cls._inner_tensor_names()
+    field_aliasing_group = self._tensor_field_aliasing_group()
+    out._has_same_tensor_field_aliasing(
+        field_aliasing_group,
+        raise_on_mismatch=True,
+    )
 
-    self_first_occurrence: dict[int, int] = {}
-    for index, name in enumerate(tensor_names):
-        self_first_occurrence.setdefault(id(getattr(self, name)), index)
-
-    for first_index in self_first_occurrence.values():
-        name = tensor_names[first_index]
-        func(
-            getattr(self, name),
-            memory_format=memory_format,
-            out=getattr(out, name),
-        )
+    apply_fn(
+        [getattr(self, group[0]) for group in field_aliasing_group],
+        lambda source, *, dest: func(source, memory_format=memory_format, out=dest),
+        dest=[getattr(out, group[0]) for group in field_aliasing_group],
+    )
 
     return out
 
@@ -1269,14 +1235,18 @@ def _[WrapperType: MokitWrapperTensorBase](
 
     aliased = self._apply_fn_to_outer_tensor(func)
 
-    tensor_names, metadata = self.__tensor_flatten__()
-    inner_tensors = [getattr(self, name) for name in tensor_names]
-    aliased_inner_values = self._apply_fn_to_inner_tensors(
-        inner_tensors,
+    _, metadata = self.__tensor_flatten__()
+
+    groups = self._tensor_field_aliasing_group()
+    aliased_inner_values = apply_fn(
+        [getattr(self, group[0]) for group in groups],
         func,
-        per_id=True,
     )
-    aliased_inner_tensors = dict(zip(tensor_names, aliased_inner_values, strict=True))
+
+    aliased_inner_tensors: dict[str, torch.Tensor] = {}
+    for group, aliased_value in zip(groups, aliased_inner_values, strict=True):
+        for name in group:
+            aliased_inner_tensors[name] = aliased_value
 
     (
         inner_tensor_values,
