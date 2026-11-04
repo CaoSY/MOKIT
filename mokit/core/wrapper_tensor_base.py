@@ -1002,6 +1002,53 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         return True
 
+    def _has_same_tensor_field_aliasing(
+        self: Self,
+        other: Self,
+        *,
+        raise_on_mismatch: bool = False,
+    ) -> bool:
+        """
+        Compare exact-object aliasing of the declared inner tensor fields.
+
+        Field names are grouped by the identity of the tensor they reference. The wrappers
+        match only when corresponding fields produce identical first-occurrence groups.
+        Storage-level view aliasing is not examined.
+
+        Args:
+            other: The wrapper to compare against.
+            raise_on_mismatch: Whether to raise at the first mismatch instead of returning
+                False.
+
+        Returns:
+            Whether both wrappers group their inner tensor fields identically.
+
+        Raises:
+            ValueError: If the wrappers have different runtime classes, or if
+                ``raise_on_mismatch`` is true and a field group differs.
+
+        """
+        if type(self) is not type(other):
+            raise ValueError(f"type mismatch: self={type(self).__name__}, other={type(other).__name__}")
+
+        cls = type(self)
+
+        tensor_names = (*cls.inner_tensor_names, *cls.keyword_inner_tensor_names)
+
+        self_first_occurrence: dict[int, int] = {}
+        other_first_occurrence: dict[int, int] = {}
+        for index, name in enumerate(tensor_names):
+            self_index = self_first_occurrence.setdefault(id(getattr(self, name)), index)
+            other_index = other_first_occurrence.setdefault(id(getattr(other, name)), index)
+
+            if self_index != other_index:
+                if raise_on_mismatch:
+                    raise ValueError(f"field aliasing differs at field {name!r}")
+                else:
+                    return False
+
+        return True
+
 
 implements = MokitWrapperTensorBase.implements
 
@@ -1132,20 +1179,13 @@ def _[WrapperType: MokitWrapperTensorBase](
     assert type(out) is cls, f"{func}: out type={type(out).__name__} does not match dispatch cls={cls.__name__}"
 
     self._has_same_attributes(out, strict=True, raise_on_mismatch=True)
+    self._has_same_tensor_field_aliasing(out, raise_on_mismatch=True)
 
     tensor_names, _ = self.__tensor_flatten__()
 
-    # Check exact-object alias topology: both wrappers must partition their field names
-    # into the same groups of identical tensor objects. View-level storage aliasing is
-    # intentionally not examined.
     self_first_occurrence: dict[int, int] = {}
-    out_first_occurrence: dict[int, int] = {}
     for index, name in enumerate(tensor_names):
-        self_index = self_first_occurrence.setdefault(id(getattr(self, name)), index)
-        out_index = out_first_occurrence.setdefault(id(getattr(out, name)), index)
-
-        if self_index != out_index:
-            raise ValueError(f"{func}: inner-tensor alias topology differs at field {name!r}")
+        self_first_occurrence.setdefault(id(getattr(self, name)), index)
 
     for first_index in self_first_occurrence.values():
         name = tensor_names[first_index]
