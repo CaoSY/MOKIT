@@ -927,6 +927,62 @@ class MokitWrapperTensorBase(MokitTensorBase):
             {name: metadata[name] for name in cls.keyword_metadata_names},
         )
 
+    def _has_same_attributes(
+        self: Self,
+        other: Self,
+        *,
+        strict: bool = True,
+        raise_on_mismatch: bool = False,
+    ) -> bool:
+        if type(self) is not type(other):
+            raise ValueError
+
+        def mismatch(
+            field: str,
+            self_value: object,
+            other_value: object,
+            *,
+            kind: str | None = None,
+        ) -> bool:
+            if raise_on_mismatch:
+                label = f"{kind} {field!r}" if kind is not None else field
+                raise ValueError(f"{label} mismatch: self={self_value!r}, other={other_value!r}")
+            return False
+
+        if strict:
+            for attr_name in ("dtype", "device", "layout", "shape"):
+                self_value = getattr(self, attr_name)
+                other_value = getattr(other, attr_name)
+
+                if self_value != other_value:
+                    return mismatch(attr_name, self_value, other_value)
+
+            self_stride = self.stride()
+            other_stride = other.stride()
+
+            if self_stride != other_stride:
+                return mismatch("stride", self_stride, other_stride)
+
+        cls = type(self)
+
+        for cls_attr_name in ("metadata_names", "keyword_metadata_names"):
+            for name in getattr(cls, cls_attr_name):
+                self_value = getattr(self, name)
+                other_value = getattr(other, name)
+
+                if self_value is other_value:
+                    continue
+
+                try:
+                    equal = bool(self_value == other_value)
+                except Exception as exc:
+                    raise ValueError(f"metadata {name!r} is not equality-comparable") from exc
+
+                if not equal:
+                    return mismatch(name, self_value, other_value, kind="metadata")
+
+        return True
+
 
 implements = MokitWrapperTensorBase.implements
 
@@ -1056,36 +1112,9 @@ def _[WrapperType: MokitWrapperTensorBase](
     )
     assert type(out) is cls, f"{func}: out type={type(out).__name__} does not match dispatch cls={cls.__name__}"
 
-    if self.dtype is not out.dtype:
-        raise ValueError(f"{func}: dtype mismatch: self={self.dtype}, out={out.dtype}")
+    self._has_same_attributes(out, strict=True, raise_on_mismatch=True)
 
-    if self.device != out.device:
-        raise ValueError(f"{func}: device mismatch: self={self.device}, out={out.device}")
-
-    if self.layout is not out.layout:
-        raise ValueError(f"{func}: layout mismatch: self={self.layout}, out={out.layout}")
-
-    if self.shape != out.shape:
-        raise ValueError(f"{func}: shape mismatch: self={self.shape}, out={out.shape}")
-
-    if self.stride() != out.stride():
-        raise ValueError(f"{func}: stride mismatch: self={self.stride()}, out={out.stride()}")
-
-    tensor_names, metadata = self.__tensor_flatten__()
-
-    for name, value in metadata.items():
-        out_value = getattr(out, name)
-
-        if value is out_value:
-            continue
-
-        try:
-            equal = bool(value == out_value)
-        except Exception as exc:
-            raise ValueError(f"{func}: metadata {name!r} is not equality-comparable") from exc
-
-        if not equal:
-            raise ValueError(f"{func}: metadata {name!r} differs: self={value!r}, out={out_value!r}")
+    tensor_names, _ = self.__tensor_flatten__()
 
     # Check exact-object alias topology: both wrappers must partition their field names
     # into the same groups of identical tensor objects. View-level storage aliasing is

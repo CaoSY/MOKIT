@@ -3573,7 +3573,7 @@ def test_clone_out_rejects_nested_wrapper_metadata_mismatch() -> None:
     out_nested = _Wrapper(torch.zeros(4, dtype=torch.float32), tag="out")
     out = _Wrapper(out_nested, bias=torch.zeros(4, dtype=torch.float32))
 
-    with pytest.raises(ValueError, match="metadata 'tag' differs"):
+    with pytest.raises(ValueError, match="metadata 'tag' mismatch"):
         torch.ops.aten.clone.out(source, out=out)
 
 
@@ -3636,7 +3636,7 @@ def test_clone_out_rejects_metadata_mismatch() -> None:
     source = _Wrapper(torch.zeros(2, 3), tag="source")
     out = _Wrapper(torch.zeros(2, 3), tag="out")
 
-    with pytest.raises(ValueError, match="metadata 'tag' differs"):
+    with pytest.raises(ValueError, match="metadata 'tag' mismatch"):
         torch.ops.aten.clone.out(source, out=out)
 
 
