@@ -3669,7 +3669,7 @@ def test_clone_out_rejects_alias_topology_mismatch() -> None:
     source = _AliasWrapper(shared, shared)
     out = _AliasWrapper(torch.zeros(2, 3), torch.zeros(2, 3))
 
-    with pytest.raises(ValueError, match="alias topology differs at field 'right'"):
+    with pytest.raises(ValueError, match="field aliasing differs at field 'right'"):
         torch.ops.aten.clone.out(source, out=out)
 
 
@@ -3682,7 +3682,7 @@ def test_clone_out_rejects_nested_alias_topology_mismatch() -> None:
         _Wrapper(torch.zeros(4, dtype=torch.float32)),
     )
 
-    with pytest.raises(ValueError, match="alias topology differs at field 'right'"):
+    with pytest.raises(ValueError, match="field aliasing differs at field 'right'"):
         torch.ops.aten.clone.out(source, out=out)
 
 
