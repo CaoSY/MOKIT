@@ -3767,3 +3767,343 @@ def test_clone_out_handles_empty_wrapper() -> None:
 
     assert returned is out
     assert out._version == version + 1
+
+
+# ==============================================================================
+# aten.alias.default
+# ==============================================================================
+
+
+def test_alias_default_aliases_inner_tensors_and_shares_metadata() -> None:
+    """Test that alias.default aliases inner tensors and shares metadata."""
+    inner = torch.arange(4, dtype=torch.float32)
+    tag = ["tag"]
+    note = {"note": 1}
+    wrapper = _Wrapper(inner, tag, bias=torch.ones(4), note=note)
+
+    aliased = torch.ops.aten.alias.default(wrapper)
+
+    assert type(aliased) is _Wrapper
+    assert aliased is not wrapper
+    assert aliased._is_view()
+    assert aliased._base is wrapper
+    assert aliased.payload is not wrapper.payload
+    assert aliased.payload.data_ptr() == wrapper.payload.data_ptr()
+    assert aliased.bias is not wrapper.bias
+    assert aliased.bias.data_ptr() == wrapper.bias.data_ptr()
+    assert aliased.tag is tag
+    assert aliased.note is note
+    assert aliased.shape == wrapper.shape
+    assert aliased.stride() == wrapper.stride()
+
+
+def test_alias_default_initializes_via_subclass_init() -> None:
+    """Test that alias.default calls __init__ without invoking __new__."""
+
+    class InitWrapper(_Wrapper):
+        """A wrapper that derives state in its initializer."""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.derived: object = self.tag
+
+    tag = object()
+    wrapper = InitWrapper(torch.arange(4, dtype=torch.float32), tag)
+
+    aliased = torch.ops.aten.alias.default(wrapper)
+
+    assert aliased.derived is tag
+
+
+def test_alias_default_mutations_are_visible_through_both_wrappers() -> None:
+    """Test that alias.default shares storage through the inner tensors."""
+    inner = torch.arange(4, dtype=torch.float32)
+    wrapper = _Wrapper(inner)
+    aliased = torch.ops.aten.alias.default(wrapper)
+
+    aliased.payload.add_(1)
+
+    assert wrapper.payload is inner
+    assert torch.equal(inner, torch.arange(1, 5, dtype=torch.float32))
+
+
+def test_alias_default_aliases_shared_inner_tensor_once() -> None:
+    """Test that alias.default aliases a shared inner tensor once."""
+    shared = torch.arange(4, dtype=torch.float32)
+    wrapper = _AliasWrapper(shared, shared)
+
+    aliased = torch.ops.aten.alias.default(wrapper)
+
+    assert aliased.left is aliased.right
+    assert aliased.left is not shared
+    assert aliased.left.data_ptr() == shared.data_ptr()
+
+
+def test_alias_default_recursively_aliases_nested_wrapper() -> None:
+    """Test that alias.default recursively aliases a nested wrapper inner tensor."""
+    nested_tag = object()
+    outer_tag = object()
+    nested = _Wrapper(torch.arange(4, dtype=torch.float32), tag=nested_tag)
+    wrapper = _Wrapper(nested, tag=outer_tag, bias=torch.zeros(4, dtype=torch.float32))
+
+    aliased = torch.ops.aten.alias.default(wrapper)
+
+    assert aliased.tag is outer_tag
+    assert aliased.payload is not nested
+    assert type(aliased.payload) is _Wrapper
+    assert aliased.payload.tag is nested_tag
+    assert aliased.payload.payload is not nested.payload
+    assert aliased.payload.payload.data_ptr() == nested.payload.data_ptr()
+
+
+def test_alias_default_shares_outer_version_counter() -> None:
+    """Test that alias.default shares the outer version counter."""
+    wrapper = _Wrapper(torch.arange(4, dtype=torch.float32))
+    aliased = torch.ops.aten.alias.default(wrapper)
+    version = wrapper._version
+
+    assert aliased._version == version
+
+    torch._C._increment_version([wrapper])
+    assert wrapper._version == version + 1
+    assert aliased._version == wrapper._version
+
+    torch._C._increment_version([aliased])
+    assert wrapper._version == version + 2
+    assert aliased._version == wrapper._version
+
+
+def test_alias_default_inner_version_counters_are_independent() -> None:
+    """Test that inner aliases do not share version counters below dispatch."""
+    inner = torch.arange(4, dtype=torch.float32)
+    wrapper = _Wrapper(inner)
+    aliased = torch.ops.aten.alias.default(wrapper)
+    version = inner._version
+    alias_version = aliased.payload._version
+
+    torch._C._increment_version([inner])
+    assert inner._version == version + 1
+    assert aliased.payload._version == alias_version
+
+    torch._C._increment_version([aliased.payload])
+    assert inner._version == version + 1
+    assert aliased.payload._version == alias_version + 1
+
+
+def test_alias_default_preserves_outer_geometry_and_autograd() -> None:
+    """Test that alias.default preserves geometry and creates an autograd view."""
+    inner = torch.arange(6, dtype=torch.float32).reshape(2, 3)
+    wrapper = _Wrapper(inner, outer_size=(2, 3), outer_stride=(1, 2), requires_grad=True)
+
+    aliased = torch.ops.aten.alias.default(wrapper)
+
+    assert aliased.shape == wrapper.shape
+    assert aliased.stride() == wrapper.stride()
+    assert aliased.requires_grad
+    assert aliased.grad_fn is not None
+    assert aliased._base is wrapper
+
+
+def test_alias_default_preserves_outer_layout() -> None:
+    """Test that alias.default preserves the outer layout."""
+    wrapper = _Wrapper(torch.arange(4, dtype=torch.float32), layout=torch.sparse_coo)
+
+    aliased = torch.ops.aten.alias.default(wrapper)
+
+    assert aliased.layout is torch.sparse_coo
+
+
+def test_alias_default_preserves_outer_storage_offset() -> None:
+    """Test that alias.default preserves the outer storage offset."""
+    wrapper = _AliasWrapper(
+        torch.arange(4, dtype=torch.float32),
+        torch.ones(4, dtype=torch.float32),
+        storage_offset=7,
+    )
+
+    aliased = torch.ops.aten.alias.default(wrapper)
+
+    assert aliased.storage_offset() == 7
+    assert aliased.left is not wrapper.left
+    assert aliased.left.data_ptr() == wrapper.left.data_ptr()
+    assert aliased.right is not wrapper.right
+    assert aliased.right.data_ptr() == wrapper.right.data_ptr()
+
+
+def test_alias_default_handles_empty_wrapper() -> None:
+    """Test that alias.default handles a wrapper with no fields."""
+    wrapper = _EmptyWrapper(outer_size=(2, 3), outer_stride=(3, 1))
+    version = wrapper._version
+
+    aliased = torch.ops.aten.alias.default(wrapper)
+
+    assert type(aliased) is _EmptyWrapper
+    assert aliased is not wrapper
+    assert aliased.shape == wrapper.shape
+    assert aliased.stride() == wrapper.stride()
+    assert aliased._version == version
+
+
+def test_alias_default_rejects_dispatch_class_mismatch() -> None:
+    """Test that alias.default rejects a mismatched dispatch class."""
+    handler = MokitWrapperTensorBase._ATEN_OP_TABLE[torch.ops.aten.alias.default]
+    wrapper = _Wrapper(torch.zeros(2, 3))
+
+    with pytest.raises(AssertionError, match="does not match type"):
+        handler(_WrapperSubclass, torch.ops.aten.alias.default, (type(wrapper),), (wrapper,), {})
+
+
+# ==============================================================================
+# aten.detach.default
+# ==============================================================================
+
+
+def test_detach_default_detaches_outer_and_inner_tensors() -> None:
+    """Test that detach.default detaches the wrapper and its inner tensors."""
+    inner = torch.arange(4, dtype=torch.float32, requires_grad=True)
+    bias = torch.ones(4, dtype=torch.float32, requires_grad=True)
+    tag = ["tag"]
+    note = {"note": 1}
+    wrapper = _Wrapper(inner, tag, bias=bias, note=note, requires_grad=True)
+
+    detached = torch.ops.aten.detach.default(wrapper)
+
+    assert type(detached) is _Wrapper
+    assert detached is not wrapper
+    assert not detached._is_view()
+    assert detached._base is None
+    assert not detached.requires_grad
+    assert detached.grad_fn is None
+    assert detached.tag is tag
+    assert detached.note is note
+    assert detached.payload is not wrapper.payload
+    assert detached.payload.data_ptr() == wrapper.payload.data_ptr()
+    assert not detached.payload.requires_grad
+    assert detached.payload.grad_fn is None
+    assert not detached.payload._is_view()
+    assert detached.payload._base is None
+    assert detached.bias is not wrapper.bias
+    assert detached.bias.data_ptr() == wrapper.bias.data_ptr()
+    assert not detached.bias.requires_grad
+    assert detached.shape == wrapper.shape
+    assert detached.stride() == wrapper.stride()
+
+
+def test_detach_default_mutations_are_visible_through_both_wrappers() -> None:
+    """Test that detach.default shares storage through the inner tensors."""
+    inner = torch.arange(4, dtype=torch.float32)
+    wrapper = _Wrapper(inner)
+    detached = torch.ops.aten.detach.default(wrapper)
+
+    detached.payload.add_(1)
+
+    assert wrapper.payload is inner
+    assert torch.equal(inner, torch.arange(1, 5, dtype=torch.float32))
+
+
+def test_detach_default_detaches_shared_inner_tensor_once() -> None:
+    """Test that detach.default detaches a shared inner tensor once."""
+    shared = torch.arange(4, dtype=torch.float32)
+    wrapper = _AliasWrapper(shared, shared)
+
+    detached = torch.ops.aten.detach.default(wrapper)
+
+    assert detached.left is detached.right
+    assert detached.left is not shared
+    assert detached.left.data_ptr() == shared.data_ptr()
+
+
+def test_detach_default_recursively_detaches_nested_wrapper() -> None:
+    """Test that detach.default recursively detaches a nested wrapper."""
+    nested_tag = object()
+    outer_tag = object()
+    nested = _Wrapper(torch.arange(4, dtype=torch.float32), tag=nested_tag)
+    wrapper = _Wrapper(nested, tag=outer_tag, bias=torch.zeros(4, dtype=torch.float32))
+
+    detached = torch.ops.aten.detach.default(wrapper)
+
+    assert detached.tag is outer_tag
+    assert detached.payload is not nested
+    assert type(detached.payload) is _Wrapper
+    assert not detached.payload._is_view()
+    assert detached.payload._base is None
+    assert detached.payload.tag is nested_tag
+    assert detached.payload.payload is not nested.payload
+    assert detached.payload.payload.data_ptr() == nested.payload.data_ptr()
+
+
+def test_detach_default_shares_outer_version_counter() -> None:
+    """Test that detach.default shares the outer version counter."""
+    wrapper = _Wrapper(torch.arange(4, dtype=torch.float32))
+    detached = torch.ops.aten.detach.default(wrapper)
+    version = wrapper._version
+
+    assert detached._version == version
+
+    torch._C._increment_version([wrapper])
+    assert wrapper._version == version + 1
+    assert detached._version == wrapper._version
+
+    torch._C._increment_version([detached])
+    assert wrapper._version == version + 2
+    assert detached._version == wrapper._version
+
+
+def test_detach_default_inner_version_counters_are_independent() -> None:
+    """Test that inner detach results do not share version counters below dispatch."""
+    inner = torch.arange(4, dtype=torch.float32)
+    wrapper = _Wrapper(inner)
+    detached = torch.ops.aten.detach.default(wrapper)
+    version = inner._version
+    detached_version = detached.payload._version
+
+    torch._C._increment_version([inner])
+    assert inner._version == version + 1
+    assert detached.payload._version == detached_version
+
+    torch._C._increment_version([detached.payload])
+    assert inner._version == version + 1
+    assert detached.payload._version == detached_version + 1
+
+
+def test_detach_default_initializes_via_subclass_init() -> None:
+    """Test that detach.default calls __init__ without invoking __new__."""
+
+    class InitWrapper(_Wrapper):
+        """A wrapper that derives state in its initializer."""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.derived: object = self.tag
+
+    tag = object()
+    wrapper = InitWrapper(torch.arange(4, dtype=torch.float32), tag)
+
+    detached = torch.ops.aten.detach.default(wrapper)
+
+    assert detached.derived is tag
+
+
+def test_detach_default_handles_empty_wrapper() -> None:
+    """Test that detach.default handles a wrapper with no fields."""
+    wrapper = _EmptyWrapper(outer_size=(2, 3), outer_stride=(3, 1))
+    version = wrapper._version
+
+    detached = torch.ops.aten.detach.default(wrapper)
+
+    assert type(detached) is _EmptyWrapper
+    assert detached is not wrapper
+    assert not detached._is_view()
+    assert detached._base is None
+    assert detached.shape == wrapper.shape
+    assert detached.stride() == wrapper.stride()
+    assert detached._version == version
+
+
+def test_detach_default_rejects_dispatch_class_mismatch() -> None:
+    """Test that detach.default rejects a mismatched dispatch class."""
+    handler = MokitWrapperTensorBase._ATEN_OP_TABLE[torch.ops.aten.detach.default]
+    wrapper = _Wrapper(torch.zeros(2, 3))
+
+    with pytest.raises(AssertionError, match="does not match type"):
+        handler(_WrapperSubclass, torch.ops.aten.detach.default, (type(wrapper),), (wrapper,), {})
