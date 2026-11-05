@@ -1353,3 +1353,113 @@ def _[WrapperType: MokitWrapperTensorBase](
     )
 
     return self
+
+
+@implements(torch.ops.aten._to_copy.default)
+@unpack_args
+def _[WrapperType: MokitWrapperTensorBase](
+    cls: type[WrapperType],
+    func: OpOverload,
+    types: tuple[type[WrapperType]],
+    self: WrapperType,
+    *,
+    dtype: torch.dtype | None = None,
+    layout: torch.layout | None = None,
+    device: torch.device | None = None,
+    pin_memory: bool | None = None,
+    non_blocking: bool = False,
+    memory_format: torch.memory_format | None = None,
+) -> WrapperType:
+    """
+    Copy a wrapper tensor with device, pinning, and memory-format conversion.
+
+    Supported conversions are ``device``, ``pin_memory``, ``non_blocking``, and
+    ``memory_format``. ``dtype`` and ``layout`` are not supported by the base handler and
+    must be handled by a subclass. Inner tensors are copied once per alias group, and
+    declared metadata is passed through by reference.
+
+    Memory-format handling matches ``clone.default``: ``None`` and
+    ``torch.preserve_format`` preserve the source outer stride, while an explicit format
+    derives the outer stride from that format. The format is also forwarded to each inner
+    ``_to_copy`` call.
+
+    A subclass can selectively reuse this handler while implementing one of the supported
+    conversions itself: call the base handler with the arguments it should process and
+    omit the argument the subclass has already handled. The base handler only applies the
+    values it receives.
+
+    The new wrapper is constructed through ``__tensor_unflatten__``; the base does not
+    pass dtype, device, layout, or pin-memory state to the constructor. Subclasses must
+    ensure their constructor infers those native attributes from the transformed inner
+    tensors or class rules. Consequently, an empty wrapper cannot change its native
+    attributes through this handler. The base also assumes all inner tensors share the
+    outer device; heterogeneous wrappers must override the handler. Explicit
+    memory-format conversion assumes a strided wrapper and compatible inner ranks, and
+    unsupported native conversions propagate their errors.
+
+    Args:
+        cls: Runtime wrapper class whose ``__tensor_unflatten__`` reconstructs the result.
+        func: The ``aten._to_copy.default`` operator.
+        types: Participating dispatch types.
+        self: The wrapper to copy.
+        dtype: Unsupported by the base handler; must be handled by a subclass.
+        layout: Unsupported by the base handler; must be handled by a subclass.
+        device: The target device, if conversion is requested.
+        pin_memory: The pin-memory hint forwarded to the inner copies.
+        non_blocking: The asynchronous-copy hint forwarded to the inner copies.
+        memory_format: The requested memory format, if any.
+
+    Returns:
+        A new wrapper of the same runtime class.
+
+    Raises:
+        AssertionError: If assertions are enabled and ``cls`` does not match the runtime
+            class of ``self``.
+        NotImplementedError: If ``dtype`` or ``layout`` is not ``None``.
+
+    """
+    assert type(self) is cls, (
+        f"{func}: dispatch cls={cls.__name__} does not match type(self)={type(self).__name__}; types={types}"
+    )
+
+    requested_conversions = tuple(
+        name
+        for name, value in (
+            ("dtype", dtype),
+            ("layout", layout),
+        )
+        if value is not None
+    )
+    if requested_conversions:
+        raise NotImplementedError(
+            f"{func}: base handler supports only device, pin_memory, non_blocking, "
+            f"and memory_format; handle and remove {requested_conversions} before delegating"
+        )
+
+    field_aliasing_group = self.tensor_field_aliasing_groups()
+    new_unique_tensors = apply_fn(
+        (getattr(self, group[0]) for group in field_aliasing_group),
+        lambda src: func(
+            src,
+            device=device,
+            pin_memory=pin_memory,
+            non_blocking=non_blocking,
+            memory_format=memory_format,
+        ),
+    )
+
+    new_inner_tensors = {
+        name: new_unique_tensors[group_id] for group_id, group in enumerate(field_aliasing_group) for name in group
+    }
+    outer_size = self.size()
+
+    if memory_format in (None, torch.preserve_format):
+        outer_stride = self.stride()
+    else:
+        outer_stride = torch.empty(
+            outer_size,
+            device="meta",
+            memory_format=memory_format,
+        ).stride()
+
+    return cls.__tensor_unflatten__(new_inner_tensors, self.metadata, outer_size, outer_stride)
