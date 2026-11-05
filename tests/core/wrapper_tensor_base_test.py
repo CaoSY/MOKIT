@@ -4716,3 +4716,129 @@ def test_to_copy_default_rejects_dispatch_class_mismatch() -> None:
 
     with pytest.raises(AssertionError, match="does not match type"):
         handler(_WrapperSubclass, torch.ops.aten._to_copy.default, (type(wrapper),), (wrapper,), {})
+
+
+# ==============================================================================
+# Dispatch aliasing correction
+# ==============================================================================
+
+
+class _AliasingCorrectionWrapper(_Wrapper):
+    """A wrapper whose handlers deliberately return fresh instances."""
+
+
+def _rebuild_fresh[WrapperType: MokitWrapperTensorBase](
+    cls: type[WrapperType],
+    wrapper: WrapperType,
+) -> WrapperType:
+    """Rebuild a wrapper around the same fields and outer geometry."""
+    return cls.__tensor_unflatten__(
+        {name: getattr(wrapper, name) for name in cls.inner_tensor_names()},
+        wrapper.metadata,
+        wrapper.size(),
+        wrapper.stride(),
+    )
+
+
+@_AliasingCorrectionWrapper.implements(torch.ops.aten.alias.default)
+@unpack_args
+def _fresh_alias_handler(
+    cls: type[_AliasingCorrectionWrapper],
+    func: OpOverload,
+    types: tuple[type[_AliasingCorrectionWrapper]],
+    self: _AliasingCorrectionWrapper,
+) -> _AliasingCorrectionWrapper:
+    """Return a fresh wrapper without outer storage aliasing."""
+    return _rebuild_fresh(cls, self)
+
+
+@_AliasingCorrectionWrapper.implements(torch.ops.aten.copy_.default)
+@unpack_args
+def _fresh_copy_handler(
+    cls: type[_AliasingCorrectionWrapper],
+    func: OpOverload,
+    types: tuple[type[_AliasingCorrectionWrapper]],
+    self: _AliasingCorrectionWrapper,
+    src: _AliasingCorrectionWrapper,
+    non_blocking: bool = False,
+) -> _AliasingCorrectionWrapper:
+    """Return a fresh wrapper instead of the destination."""
+    return _rebuild_fresh(cls, self)
+
+
+@_AliasingCorrectionWrapper.implements(torch.ops.aten.clone.out)
+@unpack_args
+def _fresh_clone_out_handler(
+    cls: type[_AliasingCorrectionWrapper],
+    func: OpOverload,
+    types: tuple[type[_AliasingCorrectionWrapper]],
+    self: _AliasingCorrectionWrapper,
+    *,
+    memory_format: torch.memory_format | None = None,
+    out: _AliasingCorrectionWrapper,
+) -> _AliasingCorrectionWrapper:
+    """Return a fresh wrapper instead of the out destination."""
+    return _rebuild_fresh(cls, out)
+
+
+@_AliasingCorrectionWrapper.implements(torch.ops.aten.transpose_.default)
+@unpack_args
+def _fresh_transpose_handler(
+    cls: type[_AliasingCorrectionWrapper],
+    func: OpOverload,
+    types: tuple[type[_AliasingCorrectionWrapper]],
+    self: _AliasingCorrectionWrapper,
+    dim0: int,
+    dim1: int,
+) -> _AliasingCorrectionWrapper:
+    """Return a fresh wrapper instead of mutating the input."""
+    return _rebuild_fresh(cls, self)
+
+
+def test_dispatch_links_non_inplace_view_storage_to_input() -> None:
+    """Test that dispatch links a fresh view result to the input storage."""
+    wrapper = _AliasingCorrectionWrapper(torch.arange(6, dtype=torch.float32).reshape(2, 3))
+
+    result = torch.ops.aten.alias.default(wrapper)
+
+    assert result is not wrapper
+    assert cast(Any, torch._C)._is_alias_of(wrapper, result)
+    assert result.shape == wrapper.shape
+    assert result.stride() == wrapper.stride()
+    assert result.payload is wrapper.payload
+
+
+def test_dispatch_returns_destination_for_inplace_handler_result() -> None:
+    """Test that dispatch returns the destination when an in-place handler returns fresh output."""
+    destination = _AliasingCorrectionWrapper(torch.zeros(3))
+    source = _AliasingCorrectionWrapper(torch.ones(3))
+
+    result = torch.ops.aten.copy_.default(destination, source)
+
+    assert result is destination
+    assert result is not source
+
+
+def test_dispatch_returns_out_destination_for_out_handler_result() -> None:
+    """Test that dispatch returns the out argument when an out handler returns fresh output."""
+    source = _AliasingCorrectionWrapper(torch.arange(3, dtype=torch.float32))
+    out = _AliasingCorrectionWrapper(torch.zeros(3))
+
+    result = torch.ops.aten.clone.out(source, out=out)
+
+    assert result is out
+    assert result is not source
+
+
+def test_dispatch_updates_original_for_inplace_view_handler_result() -> None:
+    """Test that dispatch updates the original wrapper instead of keeping fresh inplace-view output."""
+    wrapper = _AliasingCorrectionWrapper(torch.arange(6, dtype=torch.float32).reshape(2, 3))
+    payload = wrapper.payload
+
+    result = torch.ops.aten.transpose_.default(wrapper, 0, 1)
+
+    assert result is wrapper
+    assert wrapper.shape == (3, 2)
+    assert wrapper.stride() == (1, 3)
+    assert wrapper.payload is payload
+    assert wrapper.payload.shape == (2, 3)
