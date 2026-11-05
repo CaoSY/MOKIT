@@ -11,6 +11,7 @@ from typing import Any, ClassVar, Literal, Protocol, Self, cast, overload
 import torch
 from torch._custom_class_base import CustomClassBase
 from torch._ops import OpOverload
+from torch.utils._python_dispatch import return_and_correct_aliasing
 
 from mokit.core import MokitTensorBase
 from mokit.utils import apply_fn
@@ -312,10 +313,28 @@ def _make_subclass_torch_dispatch(
         args: tuple[Any, ...] = (),
         kwargs: dict[str, Any] | None = None,
     ) -> Any:
+        """
+        Dispatch an ATen operator through the handler table of ``owner_cls``.
 
+        Registered handler results are corrected with
+        ``return_and_correct_aliasing``. See
+        :meth:`MokitWrapperTensorBase.__torch_dispatch__` for the detailed aliasing
+        behavior.
+
+        Args:
+            cls: Runtime wrapper class.
+            func: The ATen operator being called.
+            types: Types of the participating arguments.
+            args: Positional arguments.
+            kwargs: Keyword arguments, or ``None``.
+
+        Returns:
+            The handler result after schema-declared aliasing correction.
+
+        """
         found, result = _call_handler_from_table(owner_cls, "_ATEN_OP_TABLE", cls, func, types, args, kwargs)
         if found:
-            return result
+            return return_and_correct_aliasing(func, args, kwargs, result)
 
         parent = super(owner_cls, cls)  # pyrefly: ignore[invalid-argument]
         return parent.__torch_dispatch__(func, types, args, kwargs)
@@ -768,6 +787,24 @@ class MokitWrapperTensorBase(MokitTensorBase):
         """
         Dispatch an ATen operator through registered handlers.
 
+        Registered handler results are post-processed by
+        ``return_and_correct_aliasing`` so the outer tensor objects follow the aliasing
+        declared by the operator schema:
+
+        * Non-inplace view operators: link the result's outer storage to the aliased
+          input's storage. The result's size, stride, storage offset, inner tensors, and
+          metadata are left unchanged. ``MokitWrapperTensorBase`` and its subclasses have
+          no outer storage allocation, so this correction only establishes the outer
+          TensorImpl alias relationship.
+        * Inplace-view operators: replay the metadata-only operator on the original input
+          wrapper, then return that wrapper instead of the handler result.
+        * In-place and ``out=`` operators: return the mutated input argument instead of
+          the handler result, preserving object identity.
+
+        The correction does not establish aliasing between inner tensors or create view
+        autograd metadata; handlers remain responsible for forwarding the operator to
+        their fields.
+
         Args:
             func: The ATen operator being called.
             types: Types of the participating arguments.
@@ -775,7 +812,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
             kwargs: Keyword arguments, or ``None``.
 
         Returns:
-            A registered handler result.
+            The registered handler result after schema-declared aliasing correction.
 
         Raises:
             NotImplementedError: If no handler is registered for the operator.
@@ -785,7 +822,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
             MokitWrapperTensorBase, "_ATEN_OP_TABLE", cls, func, types, args, kwargs
         )
         if found:
-            return result
+            return return_and_correct_aliasing(func, args, kwargs, result)
 
         arg_types = tuple(type(arg) for arg in args)
         kwarg_types = {param: type(arg) for param, arg in kwargs.items()} if kwargs is not None else None
