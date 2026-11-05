@@ -331,7 +331,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
     name tuples below exist by default and are empty; an empty tuple means there are no
     fields of that kind. When overridden, each must be a tuple of strings, no name may
     appear more than once across the four tuples, and none may use the reserved names
-    ``outer_size`` or ``outer_stride``.
+    ``outer_size``, ``outer_stride``, or ``metadata``.
 
     Every name listed in any of the four attributes declares a field that must exist on the
     instance. The base does not validate field values; a field may be ``None``. PyTorch's
@@ -495,7 +495,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
         if duplicated_fields:
             raise ValueError(f"Field name(s) {sorted(duplicated_fields)!r} are declared more than once.")
 
-        RESERVED_FIELDS = ("outer_size", "outer_stride")
+        RESERVED_FIELDS = ("outer_size", "outer_stride", "metadata")
 
         conflict_fields = tuple(field for field in RESERVED_FIELDS if field in declared_field_counter)
         if conflict_fields:
@@ -511,8 +511,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
         """
         cls = type(self)
         tensor_names = cls._inner_tensor_names()
-        metadata = {name: getattr(self, name) for name in cls._metadata_names()}
-        return tensor_names, metadata
+        return tensor_names, self.metadata
 
     @classmethod
     def __tensor_unflatten__(
@@ -655,6 +654,17 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         with torch._C.DisableTorchFunctionSubclass():
             return func(*args, **kwargs)
+
+    @property
+    def metadata(self: Self) -> dict[str, Any]:
+        """
+        Return the declared metadata values keyed by field name.
+
+        Returns:
+            A new mapping containing the declared metadata values by reference.
+
+        """
+        return {name: getattr(self, name) for name in type(self)._metadata_names()}
 
     @classmethod
     def implements_torch_function[HandlerType: Callable[..., Any]](
@@ -969,11 +979,10 @@ class MokitWrapperTensorBase(MokitTensorBase):
             if self_stride != other_stride:
                 return mismatch("stride", self_stride, other_stride)
 
-        cls = type(self)
+        other_metadata = other.metadata
 
-        for name in cls._metadata_names():
-            self_value = getattr(self, name)
-            other_value = getattr(other, name)
+        for name, self_value in self.metadata.items():
+            other_value = other_metadata[name]
 
             if self_value is other_value:
                 continue
@@ -1089,8 +1098,6 @@ def _[WrapperType: MokitWrapperTensorBase](
         f"{func}: dispatch cls={cls.__name__} does not match type(self)={type(self).__name__}; types={types}"
     )
 
-    _, metadata = self.__tensor_flatten__()
-
     groups = self._tensor_field_aliasing_group()
     cloned_inner_tensor_values = apply_fn(
         [getattr(self, group[0]) for group in groups],
@@ -1118,7 +1125,7 @@ def _[WrapperType: MokitWrapperTensorBase](
             memory_format=memory_format,
         ).stride()
 
-    return cls.__tensor_unflatten__(cloned_inner_tensors, metadata, outer_size, outer_stride)
+    return cls.__tensor_unflatten__(cloned_inner_tensors, self.metadata, outer_size, outer_stride)
 
 
 @implements(torch.ops.aten.clone.out)
@@ -1235,8 +1242,6 @@ def _[WrapperType: MokitWrapperTensorBase](
 
     aliased = self._apply_fn_to_outer_tensor(func)
 
-    _, metadata = self.__tensor_flatten__()
-
     groups = self._tensor_field_aliasing_group()
     aliased_inner_values = apply_fn(
         [getattr(self, group[0]) for group in groups],
@@ -1253,7 +1258,7 @@ def _[WrapperType: MokitWrapperTensorBase](
         metadata_values,
         keyword_inner_tensor_values,
         keyword_metadata_values,
-    ) = cls._constructor_field_groups(aliased_inner_tensors, metadata)
+    ) = cls._constructor_field_groups(aliased_inner_tensors, self.metadata)
 
     initializer = cast(Callable[..., None], aliased.__init__)
     initializer(
