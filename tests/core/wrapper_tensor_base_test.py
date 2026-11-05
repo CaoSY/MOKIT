@@ -4842,3 +4842,39 @@ def test_dispatch_updates_original_for_inplace_view_handler_result() -> None:
     assert wrapper.stride() == (1, 3)
     assert wrapper.payload is payload
     assert wrapper.payload.shape == (2, 3)
+
+
+# ==============================================================================
+# PT2 integration
+# ==============================================================================
+
+
+class _CloneModule(torch.nn.Module):
+    """A module that clones its input for compile and export smoke tests."""
+
+    def forward(self, tensor: torch.Tensor) -> torch.Tensor:
+        """Return a clone of the input."""
+        return tensor.clone()
+
+
+def test_torch_compile_clone_smoke() -> None:
+    """Test that a wrapper survives a minimal torch.compile trace."""
+    wrapper = _Wrapper(torch.arange(6, dtype=torch.float32).reshape(2, 3))
+    compiled = torch.compile(_CloneModule(), backend="eager", fullgraph=True)
+
+    result = compiled(wrapper)
+
+    assert type(result) is _Wrapper
+    assert result is not wrapper
+    assert result.shape == wrapper.shape
+    assert result.stride() == wrapper.stride()
+    assert torch.equal(result.payload, wrapper.payload)
+
+
+def test_torch_export_clone_smoke() -> None:
+    """Test that a wrapper survives a minimal torch.export trace."""
+    wrapper = _Wrapper(torch.arange(6, dtype=torch.float32).reshape(2, 3))
+
+    exported = torch.export.export(_CloneModule(), (wrapper,))
+
+    assert isinstance(exported, torch.export.ExportedProgram)
