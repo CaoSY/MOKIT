@@ -401,6 +401,11 @@ class MokitWrapperTensorBase(MokitTensorBase):
     ``self.layout``, so ``getattr`` reads the resulting tensor property. Direct assignment
     to ``self.layout`` is not possible because ``Tensor.layout`` is read-only.
 
+    The base does not prevent a subclass from giving the outer wrapper its own storage.
+    However, the handlers registered on ``MokitWrapperTensorBase`` assume a storage-free
+    outer wrapper; subclasses that attach outer storage must override the affected
+    handlers.
+
     ``__tensor_flatten__`` and ``__tensor_unflatten__`` are PyTorch's PT2 tracing protocol.
     They do not implement pickle support.
 
