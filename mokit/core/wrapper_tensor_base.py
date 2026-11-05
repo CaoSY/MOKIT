@@ -331,8 +331,8 @@ class MokitWrapperTensorBase(MokitTensorBase):
     name tuples below exist by default and are empty; an empty tuple means there are no
     fields of that kind. When overridden, each must be a tuple of strings, no name may
     appear more than once across the four tuples, and none may use the reserved names
-    ``outer_size``, ``outer_stride``, ``metadata``, ``positional_metadata``, or
-    ``keyword_metadata``.
+    ``outer_size``, ``outer_stride``, ``metadata``, ``positional_metadata``,
+    ``keyword_metadata``, ``inner_tensor_names``, or ``metadata_names``.
 
     Every name listed in any of the four attributes declares a field that must exist on the
     instance. The base does not validate field values; a field may be ``None``. PyTorch's
@@ -502,6 +502,8 @@ class MokitWrapperTensorBase(MokitTensorBase):
             "metadata",
             "positional_metadata",
             "keyword_metadata",
+            "inner_tensor_names",
+            "metadata_names",
         )
 
         conflict_fields = tuple(field for field in RESERVED_FIELDS if field in declared_field_counter)
@@ -517,7 +519,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         """
         cls = type(self)
-        tensor_names = cls._inner_tensor_names()
+        tensor_names = cls.inner_tensor_names()
         return tensor_names, self.metadata
 
     @classmethod
@@ -671,7 +673,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
             A new dict containing the declared metadata values by reference.
 
         """
-        return {name: getattr(self, name) for name in type(self)._metadata_names()}
+        return {name: getattr(self, name) for name in type(self).metadata_names()}
 
     @property
     def positional_metadata(self: Self) -> tuple[Any, ...]:
@@ -859,7 +861,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
         return decorator
 
     @classmethod
-    def _inner_tensor_names(cls: type[Self]) -> tuple[str, ...]:
+    def inner_tensor_names(cls: type[Self]) -> tuple[str, ...]:
         """
         Return the inner tensor field names in authoritative flatten order.
 
@@ -874,7 +876,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
         return (*cls.positional_inner_tensor_names, *cls.keyword_inner_tensor_names)
 
     @classmethod
-    def _metadata_names(cls: type[Self]) -> tuple[str, ...]:
+    def metadata_names(cls: type[Self]) -> tuple[str, ...]:
         """
         Return the metadata field names in authoritative flatten order.
 
@@ -1037,7 +1039,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
         """
         groups: dict[int, list[str]] = {}
 
-        for name in type(self)._inner_tensor_names():
+        for name in type(self).inner_tensor_names():
             # Python guarantees dict insertion order:
             # https://docs.python.org/3/library/stdtypes.html#typesmapping
             # so groups are ordered by the first field that references each tensor object.
