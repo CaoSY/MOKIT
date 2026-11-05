@@ -3131,6 +3131,239 @@ def test_torch_function_forwards_related_types() -> None:
 
 
 # ------------------------------------------------------------------------------
+# metadata
+# ------------------------------------------------------------------------------
+
+
+def test_metadata_collects_positional_and_keyword_metadata() -> None:
+    """Test that metadata collects positional and keyword metadata in declared order."""
+    tag = ["tag"]
+    note = {"note": 1}
+    wrapper = _Wrapper(torch.zeros(2, 3), tag, note=note)
+
+    metadata = wrapper.metadata
+
+    assert metadata == {"tag": tag, "note": note}
+    assert list(metadata) == ["tag", "note"]
+    assert metadata["tag"] is tag
+    assert metadata["note"] is note
+
+
+def test_metadata_returns_new_dict_each_access() -> None:
+    """Test that metadata returns a new dict whose mutation does not affect the wrapper."""
+    tag = object()
+    note = object()
+    wrapper = _Wrapper(torch.zeros(2, 3), tag, note=note)
+
+    metadata = wrapper.metadata
+    metadata["tag"] = "changed"
+
+    assert wrapper.metadata == {"tag": tag, "note": note}
+    assert wrapper.metadata is not wrapper.metadata
+
+
+def test_metadata_returns_empty_dict_for_empty_wrapper() -> None:
+    """Test that metadata is empty for a wrapper with no metadata fields."""
+    assert _EmptyWrapper().metadata == {}
+
+
+# ------------------------------------------------------------------------------
+# positional_metadata
+# ------------------------------------------------------------------------------
+
+
+def test_positional_metadata_returns_positional_values() -> None:
+    """Test that positional_metadata returns the positional metadata values."""
+    tag = ["tag"]
+    wrapper = _Wrapper(torch.zeros(2, 3), tag, note={"note": 1})
+
+    positional_metadata = wrapper.positional_metadata
+
+    assert positional_metadata == (tag,)
+    assert positional_metadata[0] is tag
+
+
+def test_positional_metadata_returns_empty_tuple_for_empty_wrapper() -> None:
+    """Test that positional_metadata is empty for a wrapper with no positional metadata."""
+    assert _EmptyWrapper().positional_metadata == ()
+
+
+# ------------------------------------------------------------------------------
+# keyword_metadata
+# ------------------------------------------------------------------------------
+
+
+def test_keyword_metadata_returns_keyword_values() -> None:
+    """Test that keyword_metadata returns the keyword metadata values."""
+    note = {"note": 1}
+    wrapper = _Wrapper(torch.zeros(2, 3), note=note)
+
+    keyword_metadata = wrapper.keyword_metadata
+
+    assert keyword_metadata == {"note": note}
+    assert keyword_metadata["note"] is note
+
+
+def test_keyword_metadata_returns_new_dict_each_access() -> None:
+    """Test that keyword_metadata returns a new dict whose mutation does not affect the wrapper."""
+    note = object()
+    wrapper = _Wrapper(torch.zeros(2, 3), note=note)
+
+    keyword_metadata = wrapper.keyword_metadata
+    keyword_metadata["note"] = "changed"
+
+    assert wrapper.keyword_metadata == {"note": note}
+    assert wrapper.keyword_metadata is not wrapper.keyword_metadata
+
+
+def test_keyword_metadata_returns_empty_dict_for_empty_wrapper() -> None:
+    """Test that keyword_metadata is empty for a wrapper with no keyword metadata."""
+    assert _EmptyWrapper().keyword_metadata == {}
+
+
+# ------------------------------------------------------------------------------
+# inner_tensor_names
+# ------------------------------------------------------------------------------
+
+
+def test_inner_tensor_names_concatenates_positional_and_keyword_names() -> None:
+    """Test that inner_tensor_names uses positional-then-keyword declaration order."""
+    assert _Wrapper.inner_tensor_names() == ("payload", "bias")
+    assert _AliasWrapper.inner_tensor_names() == ("left", "right")
+
+
+def test_inner_tensor_names_returns_empty_tuple_for_empty_wrapper() -> None:
+    """Test that inner_tensor_names is empty for a wrapper with no inner tensors."""
+    assert _EmptyWrapper.inner_tensor_names() == ()
+
+
+# ------------------------------------------------------------------------------
+# metadata_names
+# ------------------------------------------------------------------------------
+
+
+def test_metadata_names_concatenates_positional_and_keyword_names() -> None:
+    """Test that metadata_names uses positional-then-keyword declaration order."""
+    assert _Wrapper.metadata_names() == ("tag", "note")
+
+
+def test_metadata_names_returns_empty_tuple_for_empty_wrapper() -> None:
+    """Test that metadata_names is empty for a wrapper with no metadata fields."""
+    assert _EmptyWrapper.metadata_names() == ()
+
+
+# ------------------------------------------------------------------------------
+# has_same_attributes
+# ------------------------------------------------------------------------------
+
+
+def test_has_same_attributes_accepts_equal_wrappers() -> None:
+    """Test that has_same_attributes accepts equal native attributes and metadata."""
+    note = {"note": 1}
+    wrapper = _Wrapper(
+        torch.arange(6, dtype=torch.float32).reshape(2, 3),
+        ["tag"],
+        bias=torch.ones(2, 3),
+        note=note,
+    )
+    other = _Wrapper(
+        torch.arange(6, dtype=torch.float32).reshape(2, 3),
+        ["tag"],
+        bias=torch.ones(2, 3),
+        note=note,
+    )
+
+    assert wrapper.has_same_attributes(other)
+
+
+def test_has_same_attributes_ignores_native_attributes_when_not_strict() -> None:
+    """Test that has_same_attributes skips native attributes when strict is false."""
+    tag = ["tag"]
+    note = {"note": 1}
+    wrapper = _Wrapper(
+        torch.arange(6, dtype=torch.float32).reshape(2, 3),
+        tag,
+        bias=torch.ones(2, 3),
+        note=note,
+    )
+    other = _Wrapper(
+        torch.zeros(3, 2, dtype=torch.float64),
+        tag,
+        bias=torch.zeros(3, 2, dtype=torch.float64),
+        note=note,
+        outer_size=(3, 2),
+        outer_stride=(1, 3),
+    )
+
+    assert wrapper.has_same_attributes(other, strict=False)
+
+
+def test_has_same_attributes_checks_metadata_when_not_strict() -> None:
+    """Test that has_same_attributes still compares metadata when strict is false."""
+    wrapper = _Wrapper(torch.zeros(2, 3), "source")
+    other = _Wrapper(torch.zeros(2, 3), "other")
+
+    assert wrapper.has_same_attributes(other, strict=False) is False
+
+
+@pytest.mark.parametrize(
+    ("make_other", "message"),
+    [
+        pytest.param(lambda: _Wrapper(torch.zeros(2, 3, dtype=torch.float64)), "dtype mismatch", id="dtype"),
+        pytest.param(lambda: _Wrapper(torch.zeros(2, 3, device="meta")), "device mismatch", id="device"),
+        pytest.param(lambda: _Wrapper(torch.zeros(2, 3), layout=torch.sparse_coo), "layout mismatch", id="layout"),
+        pytest.param(
+            lambda: _Wrapper(torch.zeros(2, 3), outer_size=(3, 2), outer_stride=(2, 1)),
+            "shape mismatch",
+            id="shape",
+        ),
+        pytest.param(lambda: _Wrapper(torch.zeros(2, 3), outer_stride=(1, 2)), "stride mismatch", id="stride"),
+    ],
+)
+def test_has_same_attributes_reports_native_attribute_mismatch(
+    make_other: Callable[[], _Wrapper],
+    message: str,
+) -> None:
+    """Test that has_same_attributes reports native attribute mismatches."""
+    wrapper = _Wrapper(torch.arange(6, dtype=torch.float32).reshape(2, 3))
+    other = make_other()
+
+    assert wrapper.has_same_attributes(other) is False
+
+    with pytest.raises(ValueError, match=message):
+        wrapper.has_same_attributes(other, raise_on_mismatch=True)
+
+
+def test_has_same_attributes_reports_metadata_mismatch() -> None:
+    """Test that has_same_attributes reports metadata mismatches."""
+    wrapper = _Wrapper(torch.zeros(2, 3), "source")
+    other = _Wrapper(torch.zeros(2, 3), "other")
+
+    assert wrapper.has_same_attributes(other) is False
+
+    with pytest.raises(ValueError, match="metadata 'tag' mismatch"):
+        wrapper.has_same_attributes(other, raise_on_mismatch=True)
+
+
+def test_has_same_attributes_rejects_non_comparable_metadata() -> None:
+    """Test that has_same_attributes rejects metadata that cannot be compared."""
+    wrapper = _Wrapper(torch.zeros(2, 3), _Uncomparable())
+    other = _Wrapper(torch.zeros(2, 3), _Uncomparable())
+
+    with pytest.raises(ValueError, match="not equality-comparable"):
+        wrapper.has_same_attributes(other)
+
+
+def test_has_same_attributes_rejects_different_classes() -> None:
+    """Test that has_same_attributes rejects wrappers of different runtime classes."""
+    wrapper = _Wrapper(torch.zeros(2, 3))
+    other = _WrapperSubclass(torch.zeros(2, 3))
+
+    with pytest.raises(ValueError, match="type mismatch"):
+        wrapper.has_same_attributes(other, strict=False)
+
+
+# ------------------------------------------------------------------------------
 # _apply_fn_to_outer_tensor
 # ------------------------------------------------------------------------------
 
@@ -3284,6 +3517,52 @@ def test_has_same_tensor_field_aliasing_raises_on_mismatch() -> None:
             source.tensor_field_aliasing_groups(),
             raise_on_mismatch=True,
         )
+
+
+# ------------------------------------------------------------------------------
+# _constructor_field_groups
+# ------------------------------------------------------------------------------
+
+
+def test_constructor_field_groups_collects_all_field_kinds() -> None:
+    """Test that _constructor_field_groups collects all four constructor groups."""
+    payload = torch.tensor([1.0, 2.0])
+    bias = torch.tensor([3.0, 4.0])
+    tag = ["tag"]
+    note = {"note": 1}
+
+    groups = _Wrapper._constructor_field_groups(
+        {"bias": bias, "payload": payload},
+        {"note": note, "tag": tag},
+    )
+    positional_inner_tensors, positional_metadata, keyword_inner_tensors, keyword_metadata = groups
+
+    assert len(positional_inner_tensors) == 1
+    assert positional_inner_tensors[0] is payload
+    assert positional_metadata == (tag,)
+    assert keyword_inner_tensors == {"bias": bias}
+    assert keyword_metadata == {"note": note}
+
+
+def test_constructor_field_groups_uses_declared_field_order() -> None:
+    """Test that _constructor_field_groups uses declared field order, not mapping order."""
+    left = torch.tensor([1.0, 2.0])
+    right = torch.tensor([3.0, 4.0])
+
+    groups = _AliasWrapper._constructor_field_groups({"right": right, "left": left}, {})
+    positional_inner_tensors, positional_metadata, keyword_inner_tensors, keyword_metadata = groups
+
+    assert len(positional_inner_tensors) == 2
+    assert positional_inner_tensors[0] is left
+    assert positional_inner_tensors[1] is right
+    assert positional_metadata == ()
+    assert keyword_inner_tensors == {}
+    assert keyword_metadata == {}
+
+
+def test_constructor_field_groups_handles_empty_wrapper() -> None:
+    """Test that _constructor_field_groups returns empty groups for a fieldless wrapper."""
+    assert _EmptyWrapper._constructor_field_groups({}, {}) == ((), (), {}, {})
 
 
 # ==============================================================================
