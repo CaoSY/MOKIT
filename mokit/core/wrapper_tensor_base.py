@@ -331,7 +331,8 @@ class MokitWrapperTensorBase(MokitTensorBase):
     name tuples below exist by default and are empty; an empty tuple means there are no
     fields of that kind. When overridden, each must be a tuple of strings, no name may
     appear more than once across the four tuples, and none may use the reserved names
-    ``outer_size``, ``outer_stride``, or ``metadata``.
+    ``outer_size``, ``outer_stride``, ``metadata``, ``positional_metadata``, or
+    ``keyword_metadata``.
 
     Every name listed in any of the four attributes declares a field that must exist on the
     instance. The base does not validate field values; a field may be ``None``. PyTorch's
@@ -495,7 +496,13 @@ class MokitWrapperTensorBase(MokitTensorBase):
         if duplicated_fields:
             raise ValueError(f"Field name(s) {sorted(duplicated_fields)!r} are declared more than once.")
 
-        RESERVED_FIELDS = ("outer_size", "outer_stride", "metadata")
+        RESERVED_FIELDS = (
+            "outer_size",
+            "outer_stride",
+            "metadata",
+            "positional_metadata",
+            "keyword_metadata",
+        )
 
         conflict_fields = tuple(field for field in RESERVED_FIELDS if field in declared_field_counter)
         if conflict_fields:
@@ -661,10 +668,32 @@ class MokitWrapperTensorBase(MokitTensorBase):
         Return the declared metadata values keyed by field name.
 
         Returns:
-            A new mapping containing the declared metadata values by reference.
+            A new dict containing the declared metadata values by reference.
 
         """
         return {name: getattr(self, name) for name in type(self)._metadata_names()}
+
+    @property
+    def positional_metadata(self: Self) -> tuple[Any, ...]:
+        """
+        Return positional metadata values in declaration order.
+
+        Returns:
+            The positional metadata values by reference.
+
+        """
+        return tuple(getattr(self, name) for name in type(self).metadata_names)
+
+    @property
+    def keyword_metadata(self: Self) -> dict[str, Any]:
+        """
+        Return keyword metadata values keyed by field name.
+
+        Returns:
+            A new dict containing the keyword metadata values by reference.
+
+        """
+        return {name: getattr(self, name) for name in type(self).keyword_metadata_names}
 
     @classmethod
     def implements_torch_function[HandlerType: Callable[..., Any]](
@@ -1253,21 +1282,14 @@ def _[WrapperType: MokitWrapperTensorBase](
         for name in group:
             aliased_inner_tensors[name] = aliased_value
 
-    (
-        inner_tensor_values,
-        metadata_values,
-        keyword_inner_tensor_values,
-        keyword_metadata_values,
-    ) = cls._constructor_field_groups(aliased_inner_tensors, self.metadata)
-
     initializer = cast(Callable[..., None], aliased.__init__)
     initializer(
-        *inner_tensor_values,
-        *metadata_values,
+        *(aliased_inner_tensors[name] for name in cls.inner_tensor_names),
+        *self.positional_metadata,
         outer_size=aliased.size(),
         outer_stride=aliased.stride(),
-        **keyword_inner_tensor_values,
-        **keyword_metadata_values,
+        **{name: aliased_inner_tensors[name] for name in cls.keyword_inner_tensor_names},
+        **self.keyword_metadata,
     )
 
     return aliased
