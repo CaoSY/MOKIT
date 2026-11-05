@@ -4220,3 +4220,220 @@ def test_copy_rejects_plain_tensor_source() -> None:
 
     with pytest.raises(ValueError, match="type mismatch"):
         torch.ops.aten.copy_.default(destination, torch.zeros(2, 3))
+
+
+# ==============================================================================
+# aten._to_copy.default
+# ==============================================================================
+
+
+def test_to_copy_default_copies_inner_tensors_and_preserves_metadata() -> None:
+    """Test that _to_copy.default copies inner tensors and preserves metadata references."""
+    inner = torch.arange(4, dtype=torch.float32)
+    tag = ["source"]
+    note = {"note": 1}
+    wrapper = _Wrapper(inner, tag, bias=torch.ones(4), note=note)
+
+    copied = torch.ops.aten._to_copy.default(wrapper)
+
+    assert type(copied) is _Wrapper
+    assert copied is not wrapper
+    assert copied.payload is not wrapper.payload
+    assert torch.equal(copied.payload, wrapper.payload)
+    assert copied.bias is not wrapper.bias
+    assert torch.equal(copied.bias, wrapper.bias)
+    assert copied.tag is tag
+    assert copied.note is note
+    assert copied.shape == wrapper.shape
+    assert copied.stride() == wrapper.stride()
+
+
+def test_to_copy_default_converts_outer_and_inner_device() -> None:
+    """Test that _to_copy.default converts the outer and inner tensors to a new device."""
+    meta = torch.device("meta")
+    wrapper = _Wrapper(torch.arange(4, dtype=torch.float32), bias=torch.ones(4))
+
+    copied = torch.ops.aten._to_copy.default(wrapper, device=meta)
+
+    assert type(copied) is _Wrapper
+    assert copied.device == meta
+    assert copied.payload.device == meta
+    assert copied.bias.device == meta
+    assert copied.shape == wrapper.shape
+    assert copied.stride() == wrapper.stride()
+
+
+@pytest.mark.parametrize(
+    ("source_device", "target_device"),
+    [("cpu", "cuda"), ("cuda", "cpu")],
+)
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires an available GPU")
+def test_to_copy_default_converts_wrapper_between_cpu_and_cuda(
+    source_device: str,
+    target_device: str,
+) -> None:
+    """Test that _to_copy.default moves a wrapper between CPU and CUDA."""
+    source = torch.arange(4, dtype=torch.float32, device=source_device)
+    wrapper = _Wrapper(source, bias=torch.ones(4, device=source_device))
+
+    copied = torch.ops.aten._to_copy.default(wrapper, device=torch.device(target_device))
+
+    assert type(copied) is _Wrapper
+    assert copied.device.type == target_device
+    assert copied.payload.device.type == target_device
+    assert copied.bias.device.type == target_device
+    assert torch.equal(copied.payload.cpu(), source.cpu())
+    assert torch.equal(copied.bias.cpu(), wrapper.bias.cpu())
+    assert copied.shape == wrapper.shape
+    assert copied.stride() == wrapper.stride()
+
+
+def test_to_copy_default_deduplicates_shared_inner_tensors() -> None:
+    """Test that _to_copy.default copies an inner tensor once per object identity."""
+    shared = torch.arange(4, dtype=torch.float32)
+    wrapper = _AliasWrapper(shared, shared)
+
+    copied = torch.ops.aten._to_copy.default(wrapper, device=torch.device("meta"))
+
+    assert type(copied) is _AliasWrapper
+    assert copied.left is copied.right
+    assert copied.left is not shared
+    assert copied.left.device == torch.device("meta")
+
+
+def test_to_copy_default_does_not_preserve_view_storage_aliasing() -> None:
+    """Test that _to_copy.default gives distinct views independent copies."""
+    storage = torch.arange(6, dtype=torch.float32)
+    wrapper = _AliasWrapper(storage[:3], storage[3:])
+
+    copied = torch.ops.aten._to_copy.default(wrapper)
+
+    assert copied.left is not copied.right
+    assert copied.left.data_ptr() != copied.right.data_ptr()
+    assert torch.equal(copied.left, storage[:3])
+    assert torch.equal(copied.right, storage[3:])
+
+
+def test_to_copy_default_recursively_copies_nested_wrapper() -> None:
+    """Test that _to_copy.default recursively copies and converts an inner wrapper."""
+    meta = torch.device("meta")
+    leaf = torch.arange(4, dtype=torch.float32)
+    nested_tag = object()
+    outer_tag = object()
+    nested = _Wrapper(leaf, tag=nested_tag)
+    outer = _Wrapper(nested, tag=outer_tag, bias=torch.zeros(4, dtype=torch.float32))
+
+    copied = torch.ops.aten._to_copy.default(outer, device=meta)
+
+    assert type(copied) is _Wrapper
+    assert copied is not outer
+    assert copied.tag is outer_tag
+    assert copied.bias.device == meta
+    assert copied.payload is not nested
+    assert type(copied.payload) is _Wrapper
+    assert copied.payload.device == meta
+    assert copied.payload.tag is nested_tag
+    assert copied.payload.payload.device == meta
+    assert copied.payload.shape == nested.shape
+    assert copied.payload.stride() == nested.stride()
+
+
+@pytest.mark.parametrize("memory_format", [None, torch.preserve_format])
+def test_to_copy_default_preserves_outer_stride_without_explicit_format(
+    memory_format: torch.memory_format | None,
+) -> None:
+    """Test that _to_copy.default preserves the outer stride without an explicit format."""
+    inner = torch.arange(6, dtype=torch.float32).reshape(2, 3)
+    wrapper = _Wrapper(inner, outer_size=(2, 3), outer_stride=(1, 2))
+
+    copied = torch.ops.aten._to_copy.default(wrapper, memory_format=memory_format)
+
+    assert copied.stride() == (1, 2)
+    assert copied.payload.stride() == (3, 1)
+
+
+@pytest.mark.parametrize(
+    ("inner", "memory_format", "expected_stride"),
+    [
+        (torch.arange(6, dtype=torch.float32).reshape(2, 3).t(), torch.contiguous_format, (2, 1)),
+        (torch.arange(24, dtype=torch.float32).reshape(2, 3, 2, 2), torch.channels_last, (12, 1, 6, 3)),
+    ],
+)
+def test_to_copy_default_recomputes_outer_stride_for_explicit_memory_format(
+    inner: torch.Tensor,
+    memory_format: torch.memory_format,
+    expected_stride: tuple[int, ...],
+) -> None:
+    """Test that _to_copy.default applies an explicit memory format to outer and inner geometry."""
+    wrapper = _Wrapper(inner)
+
+    copied = torch.ops.aten._to_copy.default(wrapper, memory_format=memory_format)
+
+    assert copied.stride() == expected_stride
+    assert copied.payload.stride() == expected_stride
+
+
+def test_to_copy_default_handles_empty_wrapper() -> None:
+    """Test that _to_copy.default reconstructs a wrapper with no fields."""
+    wrapper = _EmptyWrapper(outer_size=(2, 3, 2, 2))
+
+    copied = torch.ops.aten._to_copy.default(wrapper, memory_format=torch.channels_last)
+
+    assert type(copied) is _EmptyWrapper
+    assert copied is not wrapper
+    assert copied.shape == wrapper.shape
+    assert copied.stride() == (12, 1, 6, 3)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "conversion_name"),
+    [
+        pytest.param({"dtype": torch.float64}, "dtype", id="dtype"),
+        pytest.param({"layout": torch.sparse_coo}, "layout", id="layout"),
+    ],
+)
+def test_to_copy_default_rejects_unsupported_conversions(
+    kwargs: dict[str, Any],
+    conversion_name: str,
+) -> None:
+    """Test that _to_copy.default rejects unsupported dtype and layout conversions."""
+    wrapper = _Wrapper(torch.zeros(2, 3))
+
+    with pytest.raises(NotImplementedError, match=f"handle and remove.*{conversion_name}"):
+        torch.ops.aten._to_copy.default(wrapper, **kwargs)
+
+
+def test_to_copy_default_accepts_pin_memory_and_non_blocking_hints() -> None:
+    """Test that _to_copy.default accepts the pin-memory and non-blocking hints."""
+    wrapper = _Wrapper(torch.arange(4, dtype=torch.float32), bias=torch.ones(4))
+
+    copied = torch.ops.aten._to_copy.default(wrapper, pin_memory=True, non_blocking=True)
+
+    assert type(copied) is _Wrapper
+    assert copied is not wrapper
+    assert torch.equal(copied.payload, wrapper.payload)
+    assert torch.equal(copied.bias, wrapper.bias)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires an available GPU")
+def test_to_copy_default_pins_inner_tensors() -> None:
+    """Test that _to_copy.default pins each CPU inner tensor."""
+    wrapper = _Wrapper(torch.arange(4, dtype=torch.float32), bias=torch.ones(4))
+
+    copied = torch.ops.aten._to_copy.default(wrapper, pin_memory=True)
+
+    assert type(copied) is _Wrapper
+    assert copied.device.type == "cpu"
+    assert copied.payload.is_pinned()
+    assert copied.bias.is_pinned()
+    assert torch.equal(copied.payload, wrapper.payload)
+    assert torch.equal(copied.bias, wrapper.bias)
+
+
+def test_to_copy_default_rejects_dispatch_class_mismatch() -> None:
+    """Test that _to_copy.default rejects a mismatched dispatch class."""
+    handler = MokitWrapperTensorBase._ATEN_OP_TABLE[torch.ops.aten._to_copy.default]
+    wrapper = _Wrapper(torch.zeros(2, 3))
+
+    with pytest.raises(AssertionError, match="does not match type"):
+        handler(_WrapperSubclass, torch.ops.aten._to_copy.default, (type(wrapper),), (wrapper,), {})
