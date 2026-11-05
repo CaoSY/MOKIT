@@ -148,8 +148,8 @@ def test_init_subclass_rejects_non_string_field(attr_name: str) -> None:
 @pytest.mark.parametrize(
     "attributes",
     [
-        {"inner_tensor_names": ("payload", "payload")},
-        {"inner_tensor_names": ("payload",), "metadata_names": ("payload",)},
+        {"positional_inner_tensor_names": ("payload", "payload")},
+        {"positional_inner_tensor_names": ("payload",), "positional_metadata_names": ("payload",)},
         {"keyword_inner_tensor_names": ("bias",), "keyword_metadata_names": ("bias",)},
     ],
 )
@@ -163,7 +163,7 @@ def test_init_subclass_rejects_duplicate_field(attributes: dict[str, tuple[str, 
 def test_init_subclass_rejects_reserved_field(field: str) -> None:
     """Test that a reserved field name is rejected."""
     with pytest.raises(ValueError, match=f"Reserved field name.*{field}"):
-        type("Bad", (MokitWrapperTensorBase,), {"inner_tensor_names": (field,)})
+        type("Bad", (MokitWrapperTensorBase,), {"positional_inner_tensor_names": (field,)})
 
 
 # ------------------------------------------------------------------------------
@@ -174,8 +174,8 @@ def test_init_subclass_rejects_reserved_field(field: str) -> None:
 class _Wrapper(MokitWrapperTensorBase):
     """A wrapper whose four flatten attributes cover every field kind."""
 
-    inner_tensor_names = ("payload",)
-    metadata_names = ("tag",)
+    positional_inner_tensor_names = ("payload",)
+    positional_metadata_names = ("tag",)
     keyword_inner_tensor_names = ("bias",)
     keyword_metadata_names = ("note",)
 
@@ -255,7 +255,7 @@ class _EmptyWrapper(MokitWrapperTensorBase):
 class _RequiresGradFieldWrapper(_Wrapper):
     """A wrapper whose declared requires_grad field collides with the tensor attribute."""
 
-    metadata_names = ("requires_grad",)
+    positional_metadata_names = ("requires_grad",)
     keyword_inner_tensor_names = ()
     keyword_metadata_names = ()
 
@@ -537,7 +537,7 @@ def test_tensor_flatten_unflatten_round_trip() -> None:
 class _DispatchWrapper(MokitWrapperTensorBase):
     """A minimal wrapper used to exercise the dispatch methods."""
 
-    inner_tensor_names = ("payload",)
+    positional_inner_tensor_names = ("payload",)
 
     def __new__(cls, inner: torch.Tensor) -> torch.Tensor:
         """Create the wrapper tensor."""
@@ -3298,7 +3298,7 @@ def test_has_same_tensor_field_aliasing_raises_on_mismatch() -> None:
 class _AliasWrapper(MokitWrapperTensorBase):
     """A wrapper with two inner tensor fields for alias-topology tests."""
 
-    inner_tensor_names = ("left", "right")
+    positional_inner_tensor_names = ("left", "right")
 
     def __new__(
         cls,

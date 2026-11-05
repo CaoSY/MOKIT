@@ -345,9 +345,9 @@ class MokitWrapperTensorBase(MokitTensorBase):
     the parent tuple. The base cannot detect fields that are not declared in them.
 
     Attributes:
-        inner_tensor_names: Names of inner tensors passed positionally to ``__init__`` and
+        positional_inner_tensor_names: Names of inner tensors passed positionally to ``__init__`` and
             ``__new__``, in order.
-        metadata_names: Names of non-``Tensor`` attributes passed positionally to
+        positional_metadata_names: Names of non-``Tensor`` attributes passed positionally to
             ``__init__`` and ``__new__``, in order.
         keyword_inner_tensor_names: Names of inner tensors passed as keyword arguments to
             ``__init__`` and ``__new__``.
@@ -365,8 +365,8 @@ class MokitWrapperTensorBase(MokitTensorBase):
             **keyword_metadata_values,
         )
 
-    The first ``*`` group contains the values named by ``inner_tensor_names``; the second
-    contains the values named by ``metadata_names``. The ``**`` groups use the names from
+    The first ``*`` group contains the values named by ``positional_inner_tensor_names``; the second
+    contains the values named by ``positional_metadata_names``. The ``**`` groups use the names from
     the keyword tuples. The two geometry arguments may default to ``None`` for direct
     construction, but ``__tensor_unflatten__`` always passes them explicitly. They are
     reserved keyword names and must not appear in the keyword tuples.
@@ -450,14 +450,14 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
     """
 
-    inner_tensor_names: ClassVar[tuple[str, ...]] = ()
-    metadata_names: ClassVar[tuple[str, ...]] = ()
+    positional_inner_tensor_names: ClassVar[tuple[str, ...]] = ()
+    positional_metadata_names: ClassVar[tuple[str, ...]] = ()
     keyword_inner_tensor_names: ClassVar[tuple[str, ...]] = ()
     keyword_metadata_names: ClassVar[tuple[str, ...]] = ()
 
     _FLATTEN_ATTR_NAMES: ClassVar[tuple[str, ...]] = (
-        "inner_tensor_names",
-        "metadata_names",
+        "positional_inner_tensor_names",
+        "positional_metadata_names",
         "keyword_inner_tensor_names",
         "keyword_metadata_names",
     )
@@ -682,7 +682,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
             The positional metadata values by reference.
 
         """
-        return tuple(getattr(self, name) for name in type(self).metadata_names)
+        return tuple(getattr(self, name) for name in type(self).positional_metadata_names)
 
     @property
     def keyword_metadata(self: Self) -> dict[str, Any]:
@@ -863,7 +863,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
         """
         Return the inner tensor field names in authoritative flatten order.
 
-        The order is positional ``inner_tensor_names`` followed by
+        The order is ``positional_inner_tensor_names`` followed by
         ``keyword_inner_tensor_names``. Flattening, field aliasing checks, and constructor
         argument assembly use this order.
 
@@ -871,14 +871,14 @@ class MokitWrapperTensorBase(MokitTensorBase):
             The flattened inner tensor field names.
 
         """
-        return (*cls.inner_tensor_names, *cls.keyword_inner_tensor_names)
+        return (*cls.positional_inner_tensor_names, *cls.keyword_inner_tensor_names)
 
     @classmethod
     def _metadata_names(cls: type[Self]) -> tuple[str, ...]:
         """
         Return the metadata field names in authoritative flatten order.
 
-        The order is positional ``metadata_names`` followed by
+        The order is ``positional_metadata_names`` followed by
         ``keyword_metadata_names``. Flattening and constructor argument assembly use this
         order.
 
@@ -886,7 +886,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
             The flattened metadata field names.
 
         """
-        return (*cls.metadata_names, *cls.keyword_metadata_names)
+        return (*cls.positional_metadata_names, *cls.keyword_metadata_names)
 
     def _apply_fn_to_outer_tensor(
         self: Self,
@@ -947,8 +947,8 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         """
         return (
-            tuple(inner_tensors[name] for name in cls.inner_tensor_names),
-            tuple(metadata[name] for name in cls.metadata_names),
+            tuple(inner_tensors[name] for name in cls.positional_inner_tensor_names),
+            tuple(metadata[name] for name in cls.positional_metadata_names),
             {name: inner_tensors[name] for name in cls.keyword_inner_tensor_names},
             {name: metadata[name] for name in cls.keyword_metadata_names},
         )
@@ -1284,7 +1284,7 @@ def _[WrapperType: MokitWrapperTensorBase](
 
     initializer = cast(Callable[..., None], aliased.__init__)
     initializer(
-        *(aliased_inner_tensors[name] for name in cls.inner_tensor_names),
+        *(aliased_inner_tensors[name] for name in cls.positional_inner_tensor_names),
         *self.positional_metadata,
         outer_size=aliased.size(),
         outer_stride=aliased.stride(),
