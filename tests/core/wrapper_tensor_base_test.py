@@ -530,6 +530,61 @@ def test_tensor_flatten_unflatten_round_trip() -> None:
 
 
 # ------------------------------------------------------------------------------
+# is_contiguous and contiguous
+# ------------------------------------------------------------------------------
+
+# These are contract tests for behavior inherited from PyTorch, not for methods
+# implemented by MokitWrapperTensorBase. is_contiguous follows the outer metadata, while
+# contiguous is a composite operator that either returns self or decomposes to clone with
+# torch.contiguous_format. The tests pin its interaction with the clone handler and
+# __tensor_unflatten__, so a change to the generic protocol that alters it is caught.
+
+
+def test_contiguous_returns_self_for_outer_contiguous_wrapper() -> None:
+    """Test that an outer-contiguous wrapper returns itself without touching inner tensors."""
+    inner = torch.arange(6, dtype=torch.float32).reshape(3, 2).t()
+    wrapper = _Wrapper(inner, outer_size=(2, 3), outer_stride=(3, 1))
+
+    assert wrapper.is_contiguous()
+    assert wrapper.contiguous() is wrapper
+    assert wrapper.payload is inner
+    assert not wrapper.payload.is_contiguous()
+
+
+def test_contiguous_clones_inner_tensors_for_outer_noncontiguous_wrapper() -> None:
+    """Test that a non-contiguous outer wrapper clones inner tensors with contiguous format."""
+    inner = torch.arange(6, dtype=torch.float32).reshape(2, 3)
+    wrapper = _Wrapper(inner, outer_size=(2, 3), outer_stride=(1, 2))
+
+    assert not wrapper.is_contiguous()
+    result = cast(_Wrapper, wrapper.contiguous())
+
+    assert result is not wrapper
+    assert result.is_contiguous()
+    assert result.stride() == (3, 1)
+    assert result.payload is not inner
+    assert result.payload.stride() == (3, 1)
+    assert result.payload.is_contiguous()
+
+
+def test_contiguous_reconstructs_noncontiguous_outer_and_inner() -> None:
+    """Test that contiguous makes both outer geometry and inner tensors contiguous."""
+    inner = torch.arange(6, dtype=torch.float32).reshape(3, 2).t()
+    wrapper = _Wrapper(inner)
+
+    assert not wrapper.is_contiguous()
+    assert not wrapper.payload.is_contiguous()
+
+    result = cast(_Wrapper, wrapper.contiguous())
+
+    assert result is not wrapper
+    assert result.is_contiguous()
+    assert result.stride() == (3, 1)
+    assert result.payload.stride() == (3, 1)
+    assert result.payload.is_contiguous()
+
+
+# ------------------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------------------
 
