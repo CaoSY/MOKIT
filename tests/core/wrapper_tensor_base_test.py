@@ -3203,34 +3203,34 @@ def test_apply_fn_to_outer_tensor_forwards_arguments() -> None:
 
 
 # ------------------------------------------------------------------------------
-# _tensor_field_aliasing_group
+# tensor_field_aliasing_groups
 # ------------------------------------------------------------------------------
 
 
-def test_tensor_field_aliasing_group_groups_shared_tensors() -> None:
+def test_tensor_field_aliasing_groups_groups_shared_tensors() -> None:
     """Test that shared inner tensors are grouped by object identity."""
     shared = torch.arange(4, dtype=torch.float32)
     wrapper = _Wrapper(shared, bias=shared)
 
-    assert wrapper._tensor_field_aliasing_group() == (("payload", "bias"),)
+    assert wrapper.tensor_field_aliasing_groups() == (("payload", "bias"),)
 
 
-def test_tensor_field_aliasing_group_orders_distinct_groups_by_first_occurrence() -> None:
+def test_tensor_field_aliasing_groups_orders_distinct_groups_by_first_occurrence() -> None:
     """Test that distinct inner tensors form groups in field order."""
     payload = torch.arange(4, dtype=torch.float32)
     bias = torch.ones(4, dtype=torch.float32)
     wrapper = _Wrapper(payload, bias=bias)
 
-    assert wrapper._tensor_field_aliasing_group() == (("payload",), ("bias",))
+    assert wrapper.tensor_field_aliasing_groups() == (("payload",), ("bias",))
 
 
-def test_tensor_field_aliasing_group_handles_empty_wrapper() -> None:
+def test_tensor_field_aliasing_groups_handles_empty_wrapper() -> None:
     """Test that an empty wrapper has no aliasing groups."""
-    assert _EmptyWrapper()._tensor_field_aliasing_group() == ()
+    assert _EmptyWrapper().tensor_field_aliasing_groups() == ()
 
 
 # ------------------------------------------------------------------------------
-# _has_same_tensor_field_aliasing
+# has_same_tensor_field_aliasing
 # ------------------------------------------------------------------------------
 
 
@@ -3245,7 +3245,7 @@ def test_has_same_tensor_field_aliasing_accepts_matching_groups() -> None:
         torch.ones(4, dtype=torch.float32),
     )
 
-    assert target._has_same_tensor_field_aliasing(source._tensor_field_aliasing_group())
+    assert target.has_same_tensor_field_aliasing(source.tensor_field_aliasing_groups())
 
 
 def test_has_same_tensor_field_aliasing_accepts_matching_shared_groups() -> None:
@@ -3255,7 +3255,7 @@ def test_has_same_tensor_field_aliasing_accepts_matching_shared_groups() -> None
     source = _AliasWrapper(source_shared, source_shared)
     target = _AliasWrapper(target_shared, target_shared)
 
-    assert target._has_same_tensor_field_aliasing(source._tensor_field_aliasing_group())
+    assert target.has_same_tensor_field_aliasing(source.tensor_field_aliasing_groups())
 
 
 def test_has_same_tensor_field_aliasing_rejects_mismatch_without_raising() -> None:
@@ -3267,7 +3267,7 @@ def test_has_same_tensor_field_aliasing_rejects_mismatch_without_raising() -> No
         torch.ones(4, dtype=torch.float32),
     )
 
-    assert not target._has_same_tensor_field_aliasing(source._tensor_field_aliasing_group())
+    assert not target.has_same_tensor_field_aliasing(source.tensor_field_aliasing_groups())
 
 
 def test_has_same_tensor_field_aliasing_raises_on_mismatch() -> None:
@@ -3280,8 +3280,8 @@ def test_has_same_tensor_field_aliasing_raises_on_mismatch() -> None:
     )
 
     with pytest.raises(ValueError, match="field aliasing differs"):
-        target._has_same_tensor_field_aliasing(
-            source._tensor_field_aliasing_group(),
+        target.has_same_tensor_field_aliasing(
+            source.tensor_field_aliasing_groups(),
             raise_on_mismatch=True,
         )
 

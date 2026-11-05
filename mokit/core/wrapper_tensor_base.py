@@ -890,72 +890,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
         """
         return (*cls.positional_metadata_names, *cls.keyword_metadata_names)
 
-    def _apply_fn_to_outer_tensor(
-        self: Self,
-        func: OpOverload | Callable[..., Any],
-        *args: Any,
-        **kwargs: Any,
-    ) -> Self:
-        """
-        Apply a metadata-only operator to the outer tensor shell.
-
-        The operator runs with Python dispatch disabled, so it receives the wrapper as a
-        storage-free Tensor instead of re-entering this dispatcher. The result is retyped
-        to the wrapper class. Only view and metadata operators are supported;
-        data-dependent operators must not use this method because the outer shell has no
-        storage.
-
-        Args:
-            func: The metadata-only operator to apply.
-            *args: Positional operator arguments.
-            **kwargs: Keyword operator arguments.
-
-        Returns:
-            The wrapper-class shell produced by the operator.
-
-        Raises:
-            RuntimeError: If the operator rejects a storage-free Tensor.
-
-        """
-        cls = type(self)
-        with torch._C._DisableTorchDispatch():
-            result = func(self, *args, **kwargs)
-            if type(result) is not cls:
-                result = result.as_subclass(cls)
-
-        return result
-
-    @classmethod
-    def _constructor_field_groups(
-        cls,
-        inner_tensors: Mapping[str, torch.Tensor | CustomClassBase],
-        metadata: Mapping[str, Any],
-    ) -> tuple[
-        tuple[torch.Tensor | CustomClassBase, ...],
-        tuple[Any, ...],
-        dict[str, torch.Tensor | CustomClassBase],
-        dict[str, Any],
-    ]:
-        """
-        Collect the four constructor field groups from flattened data.
-
-        Args:
-            inner_tensors: The inner tensors keyed by their flattened names.
-            metadata: The metadata mapping from ``__tensor_flatten__``.
-
-        Returns:
-            Positional inner tensors, positional metadata, keyword inner tensors, and
-            keyword metadata, in constructor-protocol order.
-
-        """
-        return (
-            tuple(inner_tensors[name] for name in cls.positional_inner_tensor_names),
-            tuple(metadata[name] for name in cls.positional_metadata_names),
-            {name: inner_tensors[name] for name in cls.keyword_inner_tensor_names},
-            {name: metadata[name] for name in cls.keyword_metadata_names},
-        )
-
-    def _has_same_attributes(
+    def has_same_attributes(
         self: Self,
         other: Self,
         *,
@@ -1027,7 +962,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         return True
 
-    def _tensor_field_aliasing_group(self) -> tuple[tuple[str, ...], ...]:
+    def tensor_field_aliasing_groups(self) -> tuple[tuple[str, ...], ...]:
         """
         Group inner tensor field names by exact object identity.
 
@@ -1046,7 +981,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         return tuple(tuple(names) for names in groups.values())
 
-    def _has_same_tensor_field_aliasing(
+    def has_same_tensor_field_aliasing(
         self: Self,
         field_aliasing_group: tuple[tuple[str, ...], ...],
         *,
@@ -1071,7 +1006,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
             ValueError: If ``raise_on_mismatch`` is true and a field group differs.
 
         """
-        self_group = self._tensor_field_aliasing_group()
+        self_group = self.tensor_field_aliasing_groups()
 
         if self_group == field_aliasing_group:
             return True
@@ -1080,6 +1015,71 @@ class MokitWrapperTensorBase(MokitTensorBase):
             return False
 
         raise ValueError(f"field aliasing differs: self={self_group!r}, given={field_aliasing_group!r}")
+
+    def _apply_fn_to_outer_tensor(
+        self: Self,
+        func: OpOverload | Callable[..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> Self:
+        """
+        Apply a metadata-only operator to the outer tensor shell.
+
+        The operator runs with Python dispatch disabled, so it receives the wrapper as a
+        storage-free Tensor instead of re-entering this dispatcher. The result is retyped
+        to the wrapper class. Only view and metadata operators are supported;
+        data-dependent operators must not use this method because the outer shell has no
+        storage.
+
+        Args:
+            func: The metadata-only operator to apply.
+            *args: Positional operator arguments.
+            **kwargs: Keyword operator arguments.
+
+        Returns:
+            The wrapper-class shell produced by the operator.
+
+        Raises:
+            RuntimeError: If the operator rejects a storage-free Tensor.
+
+        """
+        cls = type(self)
+        with torch._C._DisableTorchDispatch():
+            result = func(self, *args, **kwargs)
+            if type(result) is not cls:
+                result = result.as_subclass(cls)
+
+        return result
+
+    @classmethod
+    def _constructor_field_groups(
+        cls,
+        inner_tensors: Mapping[str, torch.Tensor | CustomClassBase],
+        metadata: Mapping[str, Any],
+    ) -> tuple[
+        tuple[torch.Tensor | CustomClassBase, ...],
+        tuple[Any, ...],
+        dict[str, torch.Tensor | CustomClassBase],
+        dict[str, Any],
+    ]:
+        """
+        Collect the four constructor field groups from flattened data.
+
+        Args:
+            inner_tensors: The inner tensors keyed by their flattened names.
+            metadata: The metadata mapping from ``__tensor_flatten__``.
+
+        Returns:
+            Positional inner tensors, positional metadata, keyword inner tensors, and
+            keyword metadata, in constructor-protocol order.
+
+        """
+        return (
+            tuple(inner_tensors[name] for name in cls.positional_inner_tensor_names),
+            tuple(metadata[name] for name in cls.positional_metadata_names),
+            {name: inner_tensors[name] for name in cls.keyword_inner_tensor_names},
+            {name: metadata[name] for name in cls.keyword_metadata_names},
+        )
 
 
 implements = MokitWrapperTensorBase.implements
@@ -1128,7 +1128,7 @@ def _[WrapperType: MokitWrapperTensorBase](
         f"{func}: dispatch cls={cls.__name__} does not match type(self)={type(self).__name__}; types={types}"
     )
 
-    groups = self._tensor_field_aliasing_group()
+    groups = self.tensor_field_aliasing_groups()
     cloned_inner_tensor_values = apply_fn(
         [getattr(self, group[0]) for group in groups],
         func,
@@ -1211,10 +1211,10 @@ def _[WrapperType: MokitWrapperTensorBase](
     )
     assert type(out) is cls, f"{func}: out type={type(out).__name__} does not match dispatch cls={cls.__name__}"
 
-    self._has_same_attributes(out, strict=True, raise_on_mismatch=True)
+    self.has_same_attributes(out, strict=True, raise_on_mismatch=True)
 
-    field_aliasing_group = self._tensor_field_aliasing_group()
-    out._has_same_tensor_field_aliasing(
+    field_aliasing_group = self.tensor_field_aliasing_groups()
+    out.has_same_tensor_field_aliasing(
         field_aliasing_group,
         raise_on_mismatch=True,
     )
@@ -1272,7 +1272,7 @@ def _[WrapperType: MokitWrapperTensorBase](
 
     aliased = self._apply_fn_to_outer_tensor(func)
 
-    groups = self._tensor_field_aliasing_group()
+    groups = self.tensor_field_aliasing_groups()
     aliased_inner_values = apply_fn(
         [getattr(self, group[0]) for group in groups],
         func,
@@ -1338,10 +1338,10 @@ def _[WrapperType: MokitWrapperTensorBase](
         f"{func}: dispatch cls={cls.__name__} does not match type(self)={type(self).__name__}; types={types}"
     )
 
-    self._has_same_attributes(src, strict=True, raise_on_mismatch=True)
+    self.has_same_attributes(src, strict=True, raise_on_mismatch=True)
 
-    field_aliasing_group = src._tensor_field_aliasing_group()
-    self._has_same_tensor_field_aliasing(
+    field_aliasing_group = src.tensor_field_aliasing_groups()
+    self.has_same_tensor_field_aliasing(
         field_aliasing_group,
         raise_on_mismatch=True,
     )
