@@ -1010,10 +1010,9 @@ class MokitWrapperTensorBase(MokitTensorBase):
             if self_stride != other_stride:
                 return mismatch("stride", self_stride, other_stride)
 
-        other_metadata = other.metadata
-
-        for name, self_value in self.metadata.items():
-            other_value = other_metadata[name]
+        for name in type(self).metadata_names():
+            self_value = getattr(self, name)
+            other_value = getattr(other, name)
 
             if self_value is other_value:
                 continue
