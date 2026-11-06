@@ -464,6 +464,26 @@ class MokitWrapperTensorBase(MokitTensorBase):
     ``WrapperType`` return value. Registration accepts ``Callable[..., Any]`` and does not
     enforce these annotations, but accurate annotations document each operator's contract.
 
+    An ATen handler registered with ``implements`` cannot itself replace PyTorch's
+    backward. ``__torch_dispatch__`` runs below autograd, so the generated backward for
+    the operator may already be attached to the outer wrapper before the handler runs.
+    A subclass can provide custom differentiability in one of three ways:
+
+    1. Use the native outer-wrapper backward. Register only the forward handler and rely
+       on PyTorch's generated autograd formula. This is appropriate only when that formula
+       is compatible with the wrapper representation.
+
+    2. Define the autograd boundary at the public torch-function level. Register a
+       ``__torch_function__`` handler for the public function and call a
+       ``torch.autograd.Function`` or a custom operator with
+       ``torch.library.register_autograd``. The outer wrapper is then the autograd node,
+       and the custom ``backward`` is used directly. No reentrant dispatch is needed.
+
+    3. Use the inner-autograd pattern: keep the outer wrapper non-grad, call a custom
+       ``torch.autograd.Function`` or custom operator on the inner tensors inside
+       ``torch.overrides.enable_reentrant_dispatch()``, and wrap the result in a fresh
+       wrapper. See https://github.com/albanD/subclass_zoo/blob/main/inner_autograd_tensor.py.
+
     """
 
     positional_inner_tensor_names: ClassVar[tuple[str, ...]] = ()
