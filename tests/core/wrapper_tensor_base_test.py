@@ -3649,6 +3649,54 @@ def test_constructor_field_groups_handles_empty_wrapper() -> None:
     assert _EmptyWrapper._constructor_field_groups({}, {}) == ((), (), {}, {})
 
 
+# ------------------------------------------------------------------------------
+# outer_stride
+# ------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("memory_format", [None, torch.preserve_format])
+def test_outer_stride_preserves_stride_without_explicit_format(
+    memory_format: torch.memory_format | None,
+) -> None:
+    """Test that no explicit format preserves the outer stride."""
+    wrapper = _Wrapper(torch.ones(2, 2), outer_stride=(1, 2))
+
+    assert wrapper.outer_stride(memory_format=memory_format) == (1, 2)
+
+
+def test_outer_stride_defaults_to_preserve_format() -> None:
+    """Test that the default memory format preserves the outer stride."""
+    wrapper = _Wrapper(torch.ones(2, 2), outer_stride=(1, 2))
+
+    assert wrapper.outer_stride() == (1, 2)
+
+
+@pytest.mark.parametrize(
+    ("inner", "memory_format", "expected_stride"),
+    [
+        (torch.ones(2, 3), torch.contiguous_format, (3, 1)),
+        (torch.ones(2, 3, 4, 5), torch.channels_last, (60, 1, 15, 3)),
+    ],
+)
+def test_outer_stride_recomputes_stride_for_explicit_format(
+    inner: torch.Tensor,
+    memory_format: torch.memory_format,
+    expected_stride: tuple[int, ...],
+) -> None:
+    """Test that an explicit format recomputes the outer stride."""
+    wrapper = _Wrapper(inner)
+
+    assert wrapper.outer_stride(memory_format=memory_format) == expected_stride
+
+
+def test_outer_stride_rejects_incompatible_shape() -> None:
+    """Test that an incompatible memory format propagates the probe error."""
+    wrapper = _Wrapper(torch.ones(2, 3))
+
+    with pytest.raises(RuntimeError, match=r"required rank 4"):
+        wrapper.outer_stride(memory_format=torch.channels_last)
+
+
 # ==============================================================================
 # Clone handlers
 # ==============================================================================

@@ -1070,6 +1070,37 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         raise ValueError(f"field aliasing differs: self={self_group!r}, given={field_aliasing_group!r}")
 
+    def outer_stride(
+        self: Self,
+        *,
+        memory_format: torch.memory_format | None = None,
+    ) -> Sequence[int | torch.SymInt]:
+        """
+        Return the outer stride for a memory format.
+
+        ``None`` and ``torch.preserve_format`` preserve the current outer stride. An
+        explicit format is probed on a meta tensor using the wrapper's layout.
+
+        Args:
+            memory_format: The requested memory format, if any.
+
+        Returns:
+            The outer stride to use for the converted wrapper.
+
+        Raises:
+            RuntimeError: If ``torch.empty`` rejects the requested layout or memory format.
+
+        """
+        if memory_format in (None, torch.preserve_format):
+            return self.stride()
+
+        return torch.empty(
+            self.size(),
+            device="meta",
+            layout=self.layout,
+            memory_format=memory_format,
+        ).stride()
+
     @classmethod
     def _constructor_field_groups(
         cls,
@@ -1195,19 +1226,7 @@ def _[WrapperType: MokitWrapperTensorBase](
             cloned_inner_tensors[name] = cloned
 
     outer_size = self.size()
-
-    if memory_format in (None, torch.preserve_format):
-        outer_stride = self.stride()
-    else:
-        # memory_format only defines strides for the strided layout. Passing
-        # self.layout to this probe would produce meaningless or unsupported
-        # sparse strides; non-strided wrappers with explicit formats are
-        # subclass-specific.
-        outer_stride = torch.empty(
-            outer_size,
-            device="meta",
-            memory_format=memory_format,
-        ).stride()
+    outer_stride = self.outer_stride(memory_format=memory_format)
 
     return cls.__tensor_unflatten__(cloned_inner_tensors, self.metadata, outer_size, outer_stride)
 
@@ -1506,14 +1525,6 @@ def _[WrapperType: MokitWrapperTensorBase](
         name: new_unique_tensors[group_id] for group_id, group in enumerate(field_aliasing_group) for name in group
     }
     outer_size = self.size()
-
-    if memory_format in (None, torch.preserve_format):
-        outer_stride = self.stride()
-    else:
-        outer_stride = torch.empty(
-            outer_size,
-            device="meta",
-            memory_format=memory_format,
-        ).stride()
+    outer_stride = self.outer_stride(memory_format=memory_format)
 
     return cls.__tensor_unflatten__(new_inner_tensors, self.metadata, outer_size, outer_stride)
