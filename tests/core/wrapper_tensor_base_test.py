@@ -166,6 +166,16 @@ def test_init_subclass_rejects_reserved_field(field: str) -> None:
         type("Bad", (MokitWrapperTensorBase,), {"positional_inner_tensor_names": (field,)})
 
 
+def test_init_subclass_honors_extended_reserved_fields() -> None:
+    """Test that a subclass can reserve additional field names."""
+
+    class Parent(MokitWrapperTensorBase):
+        _RESERVED_FIELD_NAMES = (*MokitWrapperTensorBase._RESERVED_FIELD_NAMES, "extra")
+
+    with pytest.raises(ValueError, match=r"Reserved field name.*extra"):
+        type("Bad", (Parent,), {"positional_inner_tensor_names": ("extra",)})
+
+
 # ------------------------------------------------------------------------------
 # __repr__
 # ------------------------------------------------------------------------------
@@ -226,6 +236,17 @@ class _Wrapper(MokitWrapperTensorBase):
         self.tag = tag
         self.bias = torch.zeros_like(inner) if bias is None else bias
         self.note = note
+
+
+class _ReorderedWrapper(_Wrapper):
+    """A wrapper whose field groups are printed in a different order."""
+
+    _FLATTEN_ATTR_NAMES = (
+        "keyword_metadata_names",
+        "positional_inner_tensor_names",
+        "keyword_inner_tensor_names",
+        "positional_metadata_names",
+    )
 
 
 class _EmptyWrapper(MokitWrapperTensorBase):
@@ -289,6 +310,14 @@ def test_repr_defaults() -> None:
     expected = "_Wrapper(payload=tensor([1., 2.]), tag='hi', bias=tensor([0., 0.]), note='note')"
     assert repr(wrapper) == expected
     assert str(wrapper) == expected
+
+
+def test_repr_honors_overridden_flatten_attr_names() -> None:
+    """Test that repr uses the runtime class's flatten attribute order."""
+    wrapper = _ReorderedWrapper(torch.tensor([1.0, 2.0]))
+    assert repr(wrapper) == (
+        "_ReorderedWrapper(note='note', payload=tensor([1., 2.]), bias=tensor([0., 0.]), tag='hi')"
+    )
 
 
 @pytest.mark.parametrize(

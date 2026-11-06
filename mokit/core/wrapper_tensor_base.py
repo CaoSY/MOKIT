@@ -498,6 +498,16 @@ class MokitWrapperTensorBase(MokitTensorBase):
         "keyword_metadata_names",
     )
 
+    _RESERVED_FIELD_NAMES: ClassVar[tuple[str, ...]] = (
+        "outer_size",
+        "outer_stride",
+        "metadata",
+        "positional_metadata",
+        "keyword_metadata",
+        "inner_tensor_names",
+        "metadata_names",
+    )
+
     _TORCH_FN_TABLE: ClassVar[dict[Callable[..., Any] | None, TorchFunctionImpl]] = {}
     _ATEN_OP_TABLE: ClassVar[dict[OpOverload | None, TorchDispatchImpl]] = {}
 
@@ -517,7 +527,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
         """
         super().__init_subclass__(**kwargs)
 
-        for attr_name in MokitWrapperTensorBase._FLATTEN_ATTR_NAMES:
+        for attr_name in cls._FLATTEN_ATTR_NAMES:
             attr = getattr(cls, attr_name)
             if not isinstance(attr, tuple):
                 raise TypeError(f"The class attribute '{attr_name}' must be a tuple.")
@@ -525,76 +535,16 @@ class MokitWrapperTensorBase(MokitTensorBase):
                 raise TypeError(f"The class attribute '{attr_name}' must be a tuple of strings.")
 
         declared_field_counter = Counter(
-            field for attr_name in MokitWrapperTensorBase._FLATTEN_ATTR_NAMES for field in getattr(cls, attr_name)
+            field for attr_name in cls._FLATTEN_ATTR_NAMES for field in getattr(cls, attr_name)
         )
 
         duplicated_fields = tuple(field for field, freq in declared_field_counter.items() if freq > 1)
         if duplicated_fields:
             raise ValueError(f"Field name(s) {sorted(duplicated_fields)!r} are declared more than once.")
 
-        RESERVED_FIELDS = (
-            "outer_size",
-            "outer_stride",
-            "metadata",
-            "positional_metadata",
-            "keyword_metadata",
-            "inner_tensor_names",
-            "metadata_names",
-        )
-
-        conflict_fields = tuple(field for field in RESERVED_FIELDS if field in declared_field_counter)
+        conflict_fields = tuple(field for field in cls._RESERVED_FIELD_NAMES if field in declared_field_counter)
         if conflict_fields:
             raise ValueError(f"Reserved field name(s) {sorted(conflict_fields)!r} cannot be used.")
-
-    def __tensor_flatten__(self) -> tuple[Sequence[str], Mapping[str, Any]]:
-        """
-        Flatten the wrapper into inner tensor names and metadata.
-
-        Returns:
-            The names of the inner tensors and the metadata mapping.
-
-        """
-        cls = type(self)
-        tensor_names = cls.inner_tensor_names()
-        return tensor_names, self.metadata
-
-    @classmethod
-    def __tensor_unflatten__(
-        cls,
-        inner_tensors: Mapping[str, torch.Tensor | CustomClassBase],
-        metadata: Mapping[str, Any],
-        outer_size: Sequence[int | torch.SymInt],
-        outer_stride: Sequence[int | torch.SymInt],
-    ) -> Self:
-        """
-        Rebuild a wrapper from inner tensors, metadata, and outer geometry.
-
-        Args:
-            inner_tensors: The inner tensors, keyed by their flattened names.
-            metadata: The metadata mapping returned by ``__tensor_flatten__``.
-            outer_size: The requested outer size.
-            outer_stride: The requested outer stride.
-
-        Returns:
-            The rebuilt wrapper tensor.
-
-        """
-        (
-            inner_tensor_values,
-            metadata_values,
-            keyword_inner_tensor_values,
-            keyword_metadata_values,
-        ) = cls._constructor_field_groups(inner_tensors, metadata)
-
-        constructor = cast(Callable[..., Self], cls)
-        return constructor(
-            *inner_tensor_values,
-            *metadata_values,
-            outer_size=outer_size,
-            outer_stride=outer_stride,
-            **keyword_inner_tensor_values,
-            **keyword_metadata_values,
-        )
 
     def __repr__(self, *, tensor_contents: str | None = None) -> str:
         """
@@ -656,12 +606,62 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         fields.extend(
             f"{name}={getattr(self, name)!r}"
-            for attr_name in MokitWrapperTensorBase._FLATTEN_ATTR_NAMES
+            for attr_name in type(self)._FLATTEN_ATTR_NAMES
             for name in getattr(self, attr_name)
             if name not in printed_names
         )
 
         return f"{type(self).__name__}({', '.join(fields)})"
+
+    def __tensor_flatten__(self) -> tuple[Sequence[str], Mapping[str, Any]]:
+        """
+        Flatten the wrapper into inner tensor names and metadata.
+
+        Returns:
+            The names of the inner tensors and the metadata mapping.
+
+        """
+        cls = type(self)
+        tensor_names = cls.inner_tensor_names()
+        return tensor_names, self.metadata
+
+    @classmethod
+    def __tensor_unflatten__(
+        cls,
+        inner_tensors: Mapping[str, torch.Tensor | CustomClassBase],
+        metadata: Mapping[str, Any],
+        outer_size: Sequence[int | torch.SymInt],
+        outer_stride: Sequence[int | torch.SymInt],
+    ) -> Self:
+        """
+        Rebuild a wrapper from inner tensors, metadata, and outer geometry.
+
+        Args:
+            inner_tensors: The inner tensors, keyed by their flattened names.
+            metadata: The metadata mapping returned by ``__tensor_flatten__``.
+            outer_size: The requested outer size.
+            outer_stride: The requested outer stride.
+
+        Returns:
+            The rebuilt wrapper tensor.
+
+        """
+        (
+            inner_tensor_values,
+            metadata_values,
+            keyword_inner_tensor_values,
+            keyword_metadata_values,
+        ) = cls._constructor_field_groups(inner_tensors, metadata)
+
+        constructor = cast(Callable[..., Self], cls)
+        return constructor(
+            *inner_tensor_values,
+            *metadata_values,
+            outer_size=outer_size,
+            outer_stride=outer_stride,
+            **keyword_inner_tensor_values,
+            **keyword_metadata_values,
+        )
 
     @classmethod
     def __torch_function__(
@@ -699,39 +699,6 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         with torch._C.DisableTorchFunctionSubclass():
             return func(*args, **kwargs)
-
-    @property
-    def metadata(self: Self) -> dict[str, Any]:
-        """
-        Return the declared metadata values keyed by field name.
-
-        Returns:
-            A new dict containing the declared metadata values by reference.
-
-        """
-        return {name: getattr(self, name) for name in type(self).metadata_names()}
-
-    @property
-    def positional_metadata(self: Self) -> tuple[Any, ...]:
-        """
-        Return positional metadata values in declaration order.
-
-        Returns:
-            The positional metadata values by reference.
-
-        """
-        return tuple(getattr(self, name) for name in type(self).positional_metadata_names)
-
-    @property
-    def keyword_metadata(self: Self) -> dict[str, Any]:
-        """
-        Return keyword metadata values keyed by field name.
-
-        Returns:
-            A new dict containing the keyword metadata values by reference.
-
-        """
-        return {name: getattr(self, name) for name in type(self).keyword_metadata_names}
 
     @classmethod
     def implements_torch_function[HandlerType: Callable[..., Any]](
@@ -944,6 +911,39 @@ class MokitWrapperTensorBase(MokitTensorBase):
         """
         return (*cls.positional_metadata_names, *cls.keyword_metadata_names)
 
+    @property
+    def metadata(self: Self) -> dict[str, Any]:
+        """
+        Return the declared metadata values keyed by field name.
+
+        Returns:
+            A new dict containing the declared metadata values by reference.
+
+        """
+        return {name: getattr(self, name) for name in type(self).metadata_names()}
+
+    @property
+    def positional_metadata(self: Self) -> tuple[Any, ...]:
+        """
+        Return positional metadata values in declaration order.
+
+        Returns:
+            The positional metadata values by reference.
+
+        """
+        return tuple(getattr(self, name) for name in type(self).positional_metadata_names)
+
+    @property
+    def keyword_metadata(self: Self) -> dict[str, Any]:
+        """
+        Return keyword metadata values keyed by field name.
+
+        Returns:
+            A new dict containing the keyword metadata values by reference.
+
+        """
+        return {name: getattr(self, name) for name in type(self).keyword_metadata_names}
+
     def has_same_attributes(
         self: Self,
         other: Self,
@@ -1070,6 +1070,36 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         raise ValueError(f"field aliasing differs: self={self_group!r}, given={field_aliasing_group!r}")
 
+    @classmethod
+    def _constructor_field_groups(
+        cls,
+        inner_tensors: Mapping[str, torch.Tensor | CustomClassBase],
+        metadata: Mapping[str, Any],
+    ) -> tuple[
+        tuple[torch.Tensor | CustomClassBase, ...],
+        tuple[Any, ...],
+        dict[str, torch.Tensor | CustomClassBase],
+        dict[str, Any],
+    ]:
+        """
+        Collect the four constructor field groups from flattened data.
+
+        Args:
+            inner_tensors: The inner tensors keyed by their flattened names.
+            metadata: The metadata mapping from ``__tensor_flatten__``.
+
+        Returns:
+            Positional inner tensors, positional metadata, keyword inner tensors, and
+            keyword metadata, in constructor-protocol order.
+
+        """
+        return (
+            tuple(inner_tensors[name] for name in cls.positional_inner_tensor_names),
+            tuple(metadata[name] for name in cls.positional_metadata_names),
+            {name: inner_tensors[name] for name in cls.keyword_inner_tensor_names},
+            {name: metadata[name] for name in cls.keyword_metadata_names},
+        )
+
     def _apply_fn_to_outer_tensor(
         self: Self,
         func: OpOverload | Callable[..., Any],
@@ -1104,36 +1134,6 @@ class MokitWrapperTensorBase(MokitTensorBase):
                 result = result.as_subclass(cls)
 
         return result
-
-    @classmethod
-    def _constructor_field_groups(
-        cls,
-        inner_tensors: Mapping[str, torch.Tensor | CustomClassBase],
-        metadata: Mapping[str, Any],
-    ) -> tuple[
-        tuple[torch.Tensor | CustomClassBase, ...],
-        tuple[Any, ...],
-        dict[str, torch.Tensor | CustomClassBase],
-        dict[str, Any],
-    ]:
-        """
-        Collect the four constructor field groups from flattened data.
-
-        Args:
-            inner_tensors: The inner tensors keyed by their flattened names.
-            metadata: The metadata mapping from ``__tensor_flatten__``.
-
-        Returns:
-            Positional inner tensors, positional metadata, keyword inner tensors, and
-            keyword metadata, in constructor-protocol order.
-
-        """
-        return (
-            tuple(inner_tensors[name] for name in cls.positional_inner_tensor_names),
-            tuple(metadata[name] for name in cls.positional_metadata_names),
-            {name: inner_tensors[name] for name in cls.keyword_inner_tensor_names},
-            {name: metadata[name] for name in cls.keyword_metadata_names},
-        )
 
 
 implements = MokitWrapperTensorBase.implements
