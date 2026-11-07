@@ -407,7 +407,12 @@ class MokitWrapperTensorBase(MokitTensorBase):
     handlers.
 
     ``__tensor_flatten__`` and ``__tensor_unflatten__`` are PyTorch's PT2 tracing protocol.
-    They do not implement pickle support.
+    They do not implement pickle support. Pickle uses Tensor's default wrapper-subclass
+    path, which supports storage-free strided wrappers. Non-strided wrappers reach Tensor's
+    layout-specific reduction branches and fail explicitly; subclasses that need pickle
+    support for such layouts must override ``__reduce_ex__``. A concrete subclass must be
+    registered explicitly with ``mokit.serialization.torch_add_safe_global`` for
+    ``weights_only=True`` loading.
 
     Dispatch registration and forwarding follow this workflow:
 

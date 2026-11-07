@@ -3,7 +3,9 @@
 
 """Tests for :mod:`mokit.core.wrapper_tensor_base`."""
 
+import pickle
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import Any, ClassVar, Self, cast
 
 import pytest
@@ -5010,3 +5012,166 @@ def test_torch_export_clone_smoke() -> None:
     exported = torch.export.export(_CloneModule(), (wrapper,))
 
     assert isinstance(exported, torch.export.ExportedProgram)
+
+
+# ==============================================================================
+# Serialization
+# ==============================================================================
+
+# MokitWrapperTensorBase does not implement pickle itself; pickle uses Tensor's
+# inherited wrapper-subclass reduction. These tests pin that inherited behavior:
+# supported strided wrappers round-trip correctly, while unsupported non-strided
+# layouts fail loudly instead of silently losing state.
+
+
+def test_pickle_round_trip_preserves_wrapper_state() -> None:
+    """Test that pickle preserves fields, geometry, and requires_grad."""
+    wrapper = _Wrapper(
+        torch.arange(6, dtype=torch.float32).reshape(2, 3),
+        tag={"tag": 1},
+        note=["note"],
+        requires_grad=True,
+    )
+
+    loaded = pickle.loads(pickle.dumps(wrapper))
+
+    assert type(loaded) is _Wrapper
+    assert loaded.requires_grad
+    assert loaded.shape == wrapper.shape
+    assert loaded.stride() == wrapper.stride()
+    assert loaded.tag == wrapper.tag
+    assert loaded.note == wrapper.note
+    assert torch.equal(loaded.payload, wrapper.payload)
+    assert torch.equal(loaded.bias, wrapper.bias)
+
+
+def test_pickle_round_trip_preserves_nested_wrapper_and_aliasing() -> None:
+    """Test that pickle preserves nested wrappers and shared inner tensors."""
+    shared = torch.arange(4, dtype=torch.float32)
+    nested = _AliasWrapper(shared, shared)
+    wrapper = _Wrapper(nested, bias=torch.ones(4))
+
+    loaded = pickle.loads(pickle.dumps(wrapper))
+
+    assert type(loaded) is _Wrapper
+    assert type(loaded.payload) is _AliasWrapper
+    assert loaded.payload.left is loaded.payload.right
+    assert torch.equal(loaded.payload.left, shared)
+
+
+def test_pickle_round_trip_preserves_deeply_nested_wrappers() -> None:
+    """Test that pickle preserves multiple nested wrapper levels."""
+    shared = torch.arange(4, dtype=torch.float32)
+    leaf = _AliasWrapper(shared, shared)
+    middle = _Wrapper(leaf, bias=torch.ones(4))
+    outer = _Wrapper(middle, bias=torch.ones(4))
+
+    loaded = pickle.loads(pickle.dumps(outer))
+
+    assert type(loaded) is _Wrapper
+    assert type(loaded.payload) is _Wrapper
+    assert type(loaded.payload.payload) is _AliasWrapper
+    assert loaded.payload.payload.left is loaded.payload.payload.right
+    assert torch.equal(loaded.payload.payload.left, shared)
+
+
+# Layout is the main branch in Tensor's default reduction. Cover every layout
+# accepted by the wrapper machinery: strided and _mkldnn round-trip; sparse COO
+# and sparse compressed layouts fail during reduction; jagged is normalized to
+# strided before it reaches serialization.
+@pytest.mark.parametrize(
+    "layout",
+    [
+        pytest.param(torch.strided, id="strided"),
+        pytest.param(cast(Any, torch)._mkldnn, id="mkldnn"),
+    ],
+)
+def test_pickle_round_trip_supported_layouts(layout: torch.layout) -> None:
+    """Test that pickle preserves every supported wrapper layout."""
+    wrapper = _Wrapper(torch.arange(4, dtype=torch.float32), tag={"tag": 1}, layout=layout)
+
+    loaded = pickle.loads(pickle.dumps(wrapper))
+
+    assert loaded.layout is layout
+    assert loaded.tag == wrapper.tag
+    assert torch.equal(loaded.payload, wrapper.payload)
+
+
+def test_pickle_rejects_sparse_coo_layout() -> None:
+    """Test that default pickle fails explicitly for a sparse COO wrapper."""
+    wrapper = _Wrapper(torch.arange(4, dtype=torch.float32), layout=torch.sparse_coo)
+
+    with pytest.raises(NotImplementedError, match="unimplemented operator"):
+        pickle.dumps(wrapper)
+
+
+@pytest.mark.parametrize(
+    "layout",
+    [
+        pytest.param(torch.sparse_csr, id="csr"),
+        pytest.param(torch.sparse_csc, id="csc"),
+        pytest.param(torch.sparse_bsr, id="bsr"),
+        pytest.param(torch.sparse_bsc, id="bsc"),
+    ],
+)
+def test_pickle_rejects_sparse_compressed_layouts(layout: torch.layout) -> None:
+    """Test that default pickle fails explicitly for sparse compressed wrappers."""
+    wrapper = _Wrapper(torch.arange(4, dtype=torch.float32), layout=layout)
+
+    with pytest.raises(RuntimeError, match="layout_impl is only implemented"):
+        pickle.dumps(wrapper)
+
+
+def test_jagged_layout_normalizes_to_strided() -> None:
+    """Test that a jagged request becomes a strided wrapper before serialization."""
+    wrapper = _Wrapper(torch.arange(4, dtype=torch.float32), layout=torch.jagged)
+
+    loaded = pickle.loads(pickle.dumps(wrapper))
+
+    assert wrapper.layout is torch.strided
+    assert loaded.layout is torch.strided
+
+
+def test_pickle_round_trip_preserves_non_contiguous_outer_geometry() -> None:
+    """Test that pickle preserves a non-contiguous outer stride."""
+    wrapper = _Wrapper(torch.ones(2, 2), outer_stride=(1, 2))
+
+    loaded = pickle.loads(pickle.dumps(wrapper))
+
+    assert loaded.shape == (2, 2)
+    assert loaded.stride() == (1, 2)
+
+
+def test_pickle_round_trip_preserves_empty_wrapper() -> None:
+    """Test that pickle handles a wrapper with no declared fields."""
+    wrapper = _EmptyWrapper(outer_size=(2, 3))
+
+    loaded = pickle.loads(pickle.dumps(wrapper))
+
+    assert type(loaded) is _EmptyWrapper
+    assert loaded.shape == (2, 3)
+    assert loaded.stride() == wrapper.stride()
+
+
+def test_weights_only_round_trip_with_explicit_safe_global(tmp_path: Path) -> None:
+    """Test that weights-only loading works after explicit safe-global registration."""
+    wrapper = _Wrapper(torch.arange(4, dtype=torch.float32), tag={"tag": 1})
+    path = tmp_path / "wrapper.pt"
+    torch.save(wrapper, path)
+
+    with torch.serialization.safe_globals([_Wrapper]):
+        loaded = torch.load(path, weights_only=True)
+
+    assert type(loaded) is _Wrapper
+    assert loaded.tag == wrapper.tag
+    assert torch.equal(loaded.payload, wrapper.payload)
+
+
+def test_weights_only_requires_explicit_safe_global(tmp_path: Path) -> None:
+    """Test that weights-only loading rejects an unregistered wrapper class."""
+    wrapper = _Wrapper(torch.arange(4, dtype=torch.float32))
+    path = tmp_path / "wrapper.pt"
+    torch.save(wrapper, path)
+
+    with pytest.raises(pickle.UnpicklingError, match="Unsupported global"):
+        torch.load(path, weights_only=True)
