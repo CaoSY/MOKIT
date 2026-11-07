@@ -3,6 +3,7 @@
 
 """Tests for :mod:`mokit.core.wrapper_tensor_base`."""
 
+import copy
 import pickle
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -5453,3 +5454,107 @@ def test_weights_only_requires_explicit_safe_global(tmp_path: Path) -> None:
 
     with pytest.raises(pickle.UnpicklingError, match="Unsupported global"):
         torch.load(path, weights_only=True)
+
+
+# ==============================================================================
+# Deepcopy
+# ==============================================================================
+
+# MokitWrapperTensorBase does not define __deepcopy__. These tests pin the inherited
+# Tensor.__deepcopy__ path: it clones storage-free wrappers and then deep-copies their
+# Python state. They ensure the base's clone-time shell construction preserves layout
+# and fields, and fail loudly if PyTorch changes this inherited behavior. Unsupported
+# inherited cases, such as a non-zero synthetic storage offset, are pinned as explicit
+# failures.
+
+
+def test_deepcopy_preserves_state_and_metadata() -> None:
+    """Test that deepcopy preserves fields, geometry, and requires_grad."""
+    tag = {"tag": 1}
+    note = ["note"]
+    wrapper = _Wrapper(
+        torch.arange(6, dtype=torch.float32).reshape(2, 3),
+        tag=tag,
+        bias=torch.ones(2, 3),
+        note=note,
+        requires_grad=True,
+    )
+
+    copied = copy.deepcopy(wrapper)
+
+    assert type(copied) is _Wrapper
+    assert copied is not wrapper
+    assert copied.requires_grad
+    assert copied.shape == wrapper.shape
+    assert copied.stride() == wrapper.stride()
+    assert copied.tag == tag
+    assert copied.tag is not tag
+    assert copied.note == note
+    assert copied.note is not note
+    assert copied.payload is not wrapper.payload
+    assert torch.equal(copied.payload, wrapper.payload)
+    assert copied.bias is not wrapper.bias
+    assert torch.equal(copied.bias, wrapper.bias)
+
+
+def test_deepcopy_preserves_nested_wrapper_and_aliasing() -> None:
+    """Test that deepcopy preserves nested wrappers and shared inner tensors."""
+    shared = torch.arange(4, dtype=torch.float32)
+    nested = _AliasWrapper(shared, shared)
+    wrapper = _Wrapper(nested, bias=torch.ones(4))
+
+    copied = copy.deepcopy(wrapper)
+
+    assert type(copied.payload) is _AliasWrapper
+    assert copied.payload is not nested
+    assert copied.payload.left is copied.payload.right
+    assert torch.equal(copied.payload.left, shared)
+
+
+@pytest.mark.parametrize(
+    "layout",
+    [
+        pytest.param(torch.sparse_coo, id="sparse_coo"),
+        pytest.param(cast(Any, torch)._mkldnn, id="mkldnn"),
+    ],
+)
+def test_deepcopy_preserves_non_strided_layout(layout: torch.layout) -> None:
+    """Test that deepcopy preserves a non-strided outer layout."""
+    wrapper = _Wrapper(torch.arange(4, dtype=torch.float32), layout=layout)
+
+    copied = copy.deepcopy(wrapper)
+
+    assert copied.layout is layout
+    assert copied.payload is not wrapper.payload
+    assert torch.equal(copied.payload, wrapper.payload)
+
+
+def test_deepcopy_preserves_non_contiguous_outer_stride() -> None:
+    """Test that deepcopy preserves a non-contiguous outer stride."""
+    wrapper = _Wrapper(torch.ones(2, 2), outer_stride=(1, 2))
+
+    copied = copy.deepcopy(wrapper)
+
+    assert copied.shape == (2, 2)
+    assert copied.stride() == (1, 2)
+
+
+def test_deepcopy_rejects_nonzero_storage_offset() -> None:
+    """Test that inherited deepcopy fails loudly for a non-zero synthetic offset."""
+    shared = torch.arange(4, dtype=torch.float32)
+    wrapper = _AliasWrapper(shared, shared, storage_offset=2)
+
+    with pytest.raises(RuntimeError, match="invalid python storage"):
+        copy.deepcopy(wrapper)
+
+
+def test_deepcopy_handles_empty_wrapper() -> None:
+    """Test that deepcopy handles a wrapper with no declared fields."""
+    wrapper = _EmptyWrapper(outer_size=(2, 3), outer_stride=(3, 1))
+
+    copied = copy.deepcopy(wrapper)
+
+    assert type(copied) is _EmptyWrapper
+    assert copied is not wrapper
+    assert copied.shape == (2, 3)
+    assert copied.stride() == (3, 1)
