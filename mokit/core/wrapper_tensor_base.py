@@ -390,6 +390,16 @@ class MokitWrapperTensorBase(MokitTensorBase):
     construction, but ``__tensor_unflatten__`` always passes them explicitly. They are
     reserved keyword names and must not appear in the keyword tuples.
 
+    The base provides a default ``__new__`` that creates the shell from ``outer_size``
+    and ``outer_stride``. It recognizes ``dtype``, ``layout``, ``device``,
+    ``pin_memory``, ``requires_grad``, ``storage_offset``, ``memory_format``,
+    ``storage_size``, ``dispatch_sizes_strides_policy``, ``dispatch_device``,
+    ``dispatch_layout``, and ``_extra_dispatch_keys`` in the constructor keyword
+    arguments and otherwise uses PyTorch's factory defaults. That default requires both
+    geometry arguments, so a subclass that supports direct construction without them must
+    override ``__new__``. A subclass with field names that collide with the recognized
+    shell keywords must also override ``__new__``.
+
     The outer ``storage_offset`` is synthetic for a wrapper and is ignored. The outer
     ``layout`` is meaningful: it defaults to ``torch.strided`` and is controlled by the
     subclass through ``torch.Tensor._make_wrapper_subclass``. Because
@@ -515,6 +525,56 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
     _TORCH_FN_TABLE: ClassVar[dict[Callable[..., Any] | None, TorchFunctionImpl]] = {}
     _ATEN_OP_TABLE: ClassVar[dict[OpOverload | None, TorchDispatchImpl]] = {}
+
+    def __new__(
+        cls,
+        *args: Any,
+        outer_size: Sequence[int | torch.SymInt],
+        outer_stride: Sequence[int | torch.SymInt] | None,
+        **kwargs: Any,
+    ) -> Self:
+        """
+        Create the outer wrapper shell.
+
+        Subclasses that need different shell metadata, or whose field names collide with
+        the recognized shell keywords, must override this method. They may reuse it with
+        ``super().__new__(cls, *args, outer_size=..., outer_stride=..., **kwargs)``.
+
+        Args:
+            *args: Positional constructor field values, accepted for symmetry with
+                ``__init__`` and not inspected.
+            outer_size: Outer size for the wrapper shell.
+            outer_stride: Outer stride, or ``None`` for a contiguous stride.
+            **kwargs: Constructor keyword values. Recognized shell keys are ``dtype``,
+                ``layout``, ``device``, ``pin_memory``, ``requires_grad``,
+                ``storage_offset``, ``memory_format``, ``storage_size``,
+                ``dispatch_sizes_strides_policy``, ``dispatch_device``,
+                ``dispatch_layout``, and ``_extra_dispatch_keys``.
+
+        Returns:
+            The outer wrapper shell.
+
+        Raises:
+            TypeError: If ``outer_size`` is not a valid size.
+
+        """
+        return torch.Tensor._make_wrapper_subclass(
+            cls,
+            size=outer_size,
+            strides=outer_stride,
+            storage_offset=kwargs.get("storage_offset"),
+            memory_format=kwargs.get("memory_format"),
+            dtype=kwargs.get("dtype"),
+            layout=kwargs.get("layout", torch.strided),
+            device=kwargs.get("device"),
+            pin_memory=kwargs.get("pin_memory", False),
+            requires_grad=kwargs.get("requires_grad", False),
+            dispatch_sizes_strides_policy=kwargs.get("dispatch_sizes_strides_policy"),
+            dispatch_device=kwargs.get("dispatch_device", False),
+            dispatch_layout=kwargs.get("dispatch_layout", False),
+            _extra_dispatch_keys=kwargs.get("_extra_dispatch_keys"),
+            storage_size=kwargs.get("storage_size"),
+        )
 
     @classmethod
     def __init_subclass__(cls, **kwargs: Any) -> None:

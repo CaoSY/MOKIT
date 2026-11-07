@@ -129,6 +129,120 @@ def test_unpack_args_propagates_handler_exception() -> None:
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
+# __new__
+# ------------------------------------------------------------------------------
+
+
+class _DefaultNewWrapper(MokitWrapperTensorBase):
+    """A wrapper that relies on the default ``__new__``."""
+
+    positional_inner_tensor_names = ("payload",)
+    positional_metadata_names = ("tag",)
+
+    def __init__(
+        self,
+        payload: torch.Tensor,
+        tag: object = "tag",
+        outer_size: Sequence[int | torch.SymInt] | None = None,
+        outer_stride: Sequence[int | torch.SymInt] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Store the wrapper fields."""
+        self.payload = payload
+        self.tag = tag
+
+
+class _CustomNewWrapper(_DefaultNewWrapper):
+    """A wrapper that reuses the default ``__new__`` through ``super()``."""
+
+    @staticmethod
+    def __new__(cls, *args: Any, **kwargs: Any) -> Self:
+        """Delegate shell construction to the default implementation."""
+        return cast(Self, super().__new__(cls, *args, **kwargs))
+
+
+def test_new_builds_shell_with_explicit_geometry() -> None:
+    """Test that the default __new__ builds a shell from explicit geometry."""
+    inner = torch.arange(4, dtype=torch.float64)
+
+    wrapper = _DefaultNewWrapper(
+        inner,
+        "tag",
+        outer_size=(2, 2),
+        outer_stride=(1, 2),
+        dtype=inner.dtype,
+    )
+
+    assert type(wrapper) is _DefaultNewWrapper
+    assert wrapper.shape == (2, 2)
+    assert wrapper.stride() == (1, 2)
+    assert wrapper.dtype is torch.float64
+    assert wrapper.tag == "tag"
+    assert wrapper.payload is inner
+
+
+def test_new_forwards_shell_keywords() -> None:
+    """Test that the default __new__ forwards recognized shell keywords."""
+    inner = torch.arange(4, dtype=torch.float64)
+
+    wrapper = _DefaultNewWrapper(
+        inner,
+        outer_size=(4,),
+        outer_stride=None,
+        dtype=inner.dtype,
+        device=inner.device,
+        layout=torch.strided,
+        requires_grad=True,
+    )
+
+    assert wrapper.stride() == (1,)
+    assert wrapper.dtype is torch.float64
+    assert wrapper.device == inner.device
+    assert wrapper.layout is torch.strided
+    assert wrapper.requires_grad
+
+
+def test_new_requires_outer_size() -> None:
+    """Test that the default __new__ requires outer_size."""
+    with pytest.raises(TypeError, match="outer_size"):
+        _DefaultNewWrapper(torch.arange(4))  # pyrefly: ignore[missing-argument]
+
+
+def test_new_is_reused_through_super() -> None:
+    """Test that a subclass can delegate to the default __new__ through super()."""
+    inner = torch.arange(4, dtype=torch.float64)
+
+    wrapper = _CustomNewWrapper(
+        inner,
+        outer_size=(4,),
+        outer_stride=(1,),
+        dtype=inner.dtype,
+    )
+
+    assert type(wrapper) is _CustomNewWrapper
+    assert wrapper.shape == (4,)
+    assert wrapper.dtype is torch.float64
+
+
+def test_tensor_unflatten_uses_default_new() -> None:
+    """Test that __tensor_unflatten__ can construct through the default __new__."""
+    inner = torch.arange(4, dtype=torch.float32)
+
+    wrapper = _DefaultNewWrapper.__tensor_unflatten__(
+        {"payload": inner},
+        {"tag": "tag"},
+        (4,),
+        (1,),
+    )
+
+    assert type(wrapper) is _DefaultNewWrapper
+    assert wrapper.shape == (4,)
+    assert wrapper.stride() == (1,)
+    assert wrapper.tag == "tag"
+    assert wrapper.payload is inner
+
+
+# ------------------------------------------------------------------------------
 # __init_subclass__
 # ------------------------------------------------------------------------------
 
@@ -639,9 +753,9 @@ class _DispatchWrapper(MokitWrapperTensorBase):
 def _new_wrapper_subclass(
     name: str,
     base: type[MokitWrapperTensorBase] = _DispatchWrapper,
-) -> type[MokitWrapperTensorBase]:
+) -> type[Any]:
     """Create a fresh wrapper subclass so tests do not share dispatch state."""
-    return cast(type[MokitWrapperTensorBase], type(name, (base,), {}))
+    return cast(type[Any], type(name, (base,), {}))
 
 
 def _assert_no_dispatch_state(cls: type[MokitWrapperTensorBase]) -> None:
@@ -2213,7 +2327,7 @@ def test_torch_dispatch_multiple_inheritance_uses_mro_order() -> None:
     """Test dispatch order across two independent base classes."""
     left = _new_wrapper_subclass("MroLeft")
     right = _new_wrapper_subclass("MroRight")
-    combined = cast(type[MokitWrapperTensorBase], type("MroCombined", (left, right), {}))
+    combined = cast(type[Any], type("MroCombined", (left, right), {}))
     left_handler = _RecordingHandler(1.0)
     right_handler = _RecordingHandler(2.0)
     neg = torch.ops.aten.neg.default
@@ -2234,7 +2348,7 @@ def test_torch_dispatch_multiple_inheritance_wildcard_shadows_exact() -> None:
     """Test that an earlier base wildcard shadows a later base exact handler."""
     left = _new_wrapper_subclass("MroWildLeft")
     right = _new_wrapper_subclass("MroWildRight")
-    combined = cast(type[MokitWrapperTensorBase], type("MroWildCombined", (left, right), {}))
+    combined = cast(type[Any], type("MroWildCombined", (left, right), {}))
     left_handler = _RecordingHandler(1.0)
     right_handler = _RecordingHandler(2.0)
     op = torch.ops.aten.neg.default
@@ -2251,7 +2365,7 @@ def test_torch_dispatch_multiple_inheritance_falls_back_to_second_base_wildcard(
     """Test that dispatch reaches a wildcard on the second base after the first misses."""
     left = _new_wrapper_subclass("MroExactLeft")
     right = _new_wrapper_subclass("MroWildcardRight")
-    combined = cast(type[MokitWrapperTensorBase], type("MroExactWildCombined", (left, right), {}))
+    combined = cast(type[Any], type("MroExactWildCombined", (left, right), {}))
     left_handler = _RecordingHandler(1.0)
     right_handler = _RecordingHandler(2.0)
     neg = torch.ops.aten.neg.default
@@ -3140,7 +3254,7 @@ def test_torch_function_multiple_inheritance_uses_mro_order() -> None:
     """Test dispatch order across two independent base classes."""
     left = _new_wrapper_subclass("TorchFnMroLeft")
     right = _new_wrapper_subclass("TorchFnMroRight")
-    combined = cast(type[MokitWrapperTensorBase], type("TorchFnMroCombined", (left, right), {}))
+    combined = cast(type[Any], type("TorchFnMroCombined", (left, right), {}))
     left_handler = _RecordingHandler(1.0)
     right_handler = _RecordingHandler(2.0)
     left.implements_torch_function(torch.neg)(left_handler)
@@ -3159,7 +3273,7 @@ def test_torch_function_multiple_inheritance_wildcard_shadows_exact() -> None:
     """Test that an earlier base wildcard shadows a later base exact handler."""
     left = _new_wrapper_subclass("TorchFnMroWildLeft")
     right = _new_wrapper_subclass("TorchFnMroWildRight")
-    combined = cast(type[MokitWrapperTensorBase], type("TorchFnMroWildCombined", (left, right), {}))
+    combined = cast(type[Any], type("TorchFnMroWildCombined", (left, right), {}))
     left_handler = _RecordingHandler(1.0)
     right_handler = _RecordingHandler(2.0)
     left.implements_torch_function()(left_handler)
@@ -3175,7 +3289,7 @@ def test_torch_function_multiple_inheritance_falls_back_to_second_base_wildcard(
     """Test that dispatch reaches a wildcard on the second base after the first misses."""
     left = _new_wrapper_subclass("TorchFnMroExactLeft")
     right = _new_wrapper_subclass("TorchFnMroWildcardRight")
-    combined = cast(type[MokitWrapperTensorBase], type("TorchFnMroExactWildCombined", (left, right), {}))
+    combined = cast(type[Any], type("TorchFnMroExactWildCombined", (left, right), {}))
     left_handler = _RecordingHandler(1.0)
     right_handler = _RecordingHandler(2.0)
     left.implements_torch_function(torch.neg)(left_handler)
