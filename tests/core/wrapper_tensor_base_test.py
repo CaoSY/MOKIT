@@ -4984,6 +4984,15 @@ def test_to_copy_default_converts_outer_and_inner_device() -> None:
     assert copied.stride() == wrapper.stride()
 
 
+def test_to_copy_default_preserves_requires_grad() -> None:
+    """Test that _to_copy.default preserves the outer requires-grad state."""
+    wrapper = _Wrapper(torch.arange(4, dtype=torch.float32), requires_grad=True)
+
+    copied = torch.ops.aten._to_copy.default(wrapper)
+
+    assert copied.requires_grad
+
+
 @pytest.mark.parametrize(
     ("source_device", "target_device"),
     [("cpu", "cuda"), ("cuda", "cpu")],
