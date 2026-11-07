@@ -390,15 +390,41 @@ class MokitWrapperTensorBase(MokitTensorBase):
     construction, but ``__tensor_unflatten__`` always passes them explicitly. They are
     reserved keyword names and must not appear in the keyword tuples.
 
-    The base provides a default ``__new__`` that creates the shell from ``outer_size``
-    and ``outer_stride``. It recognizes ``dtype``, ``layout``, ``device``,
-    ``pin_memory``, ``requires_grad``, ``storage_offset``, ``memory_format``,
-    ``storage_size``, ``dispatch_sizes_strides_policy``, ``dispatch_device``,
-    ``dispatch_layout``, and ``_extra_dispatch_keys`` in the constructor keyword
-    arguments and otherwise uses PyTorch's factory defaults. That default requires both
-    geometry arguments, so a subclass that supports direct construction without them must
-    override ``__new__``. A subclass with field names that collide with the recognized
-    shell keywords must also override ``__new__``.
+    ``__new__`` is responsible for creating or customizing the outer shell; ``__init__``
+    is responsible for initializing the subclass's Python fields. ``__new__`` receives
+    the same arguments as ``__init__`` but does not initialize fields.
+
+    The base implements ``__new__`` as a thin adapter that maps recognized outer metadata
+    from the constructor arguments and delegates to ``_make_outer_tensor``. It recognizes
+    ``dtype``, ``layout``, ``device``, ``pin_memory``, ``requires_grad``,
+    ``storage_offset``, ``memory_format``, ``storage_size``,
+    ``dispatch_sizes_strides_policy``, ``dispatch_device``, ``dispatch_layout``, and
+    ``_extra_dispatch_keys`` in the constructor keyword arguments and otherwise uses
+    factory defaults.
+
+    ``_make_outer_tensor`` is a classmethod and the eventual creator of the outer shell;
+    its default implementation forwards its arguments to
+    ``torch.Tensor._make_wrapper_subclass``. Both ``__new__`` and ``_clone_outer_tensor``
+    delegate to it, so overriding ``_make_outer_tensor`` changes shell construction for
+    both new construction and cloning.
+
+    ``_clone_outer_tensor`` is an instance method that reads observable outer metadata from
+    ``self`` and delegates to ``type(self)._make_outer_tensor``. The
+    ``aten.clone.default`` handler will use ``_clone_outer_tensor`` to create the clone's outer
+    shell, then clone the inner tensors and initialize the Python fields.
+
+    The default ``_clone_outer_tensor`` copies only observable metadata and does not carry
+    ``storage_offset`` or ``storage_size``, matching plain tensor clone behavior. It also
+    cannot recover ``dispatch_sizes_strides_policy``, ``dispatch_device``,
+    ``dispatch_layout``, or ``_extra_dispatch_keys`` because PyTorch exposes no public
+    getters for those shell settings. A subclass that uses them must override
+    ``_clone_outer_tensor`` or retain the configuration itself.
+
+    The default ``__new__`` requires both geometry arguments, so a subclass that supports
+    direct construction without them must override ``__new__``. A subclass with field
+    names that collide with the recognized shell keywords must also override
+    ``__new__``. To customize shell creation, override ``_make_outer_tensor``; to
+    customize only clone-time shell reconstruction, override ``_clone_outer_tensor``.
 
     The outer ``storage_offset`` is synthetic for a wrapper and is ignored. The outer
     ``layout`` is meaningful: it defaults to ``torch.strided`` and is controlled by the
@@ -558,8 +584,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
             TypeError: If ``outer_size`` is not a valid size.
 
         """
-        return torch.Tensor._make_wrapper_subclass(
-            cls,
+        return cls._make_outer_tensor(
             size=outer_size,
             strides=outer_stride,
             storage_offset=kwargs.get("storage_offset"),
@@ -1167,6 +1192,28 @@ class MokitWrapperTensorBase(MokitTensorBase):
         ).stride()
 
     @classmethod
+    def _make_outer_tensor(cls, *args: Any, **kwargs: Any) -> Self:
+        """
+        Construct an outer wrapper shell.
+
+        The default implementation forwards positional and keyword arguments to
+        ``torch.Tensor._make_wrapper_subclass``. Subclasses may override this method to
+        provide their own outer wrapper creation logic.
+
+        Args:
+            *args: Positional arguments for the wrapper factory.
+            **kwargs: Keyword arguments for the wrapper factory.
+
+        Returns:
+            The outer wrapper shell.
+
+        Raises:
+            TypeError: If the factory rejects the provided arguments.
+
+        """
+        return torch.Tensor._make_wrapper_subclass(cls, *args, **kwargs)
+
+    @classmethod
     def _constructor_field_groups(
         cls,
         inner_tensors: Mapping[str, torch.Tensor | CustomClassBase],
@@ -1230,6 +1277,38 @@ class MokitWrapperTensorBase(MokitTensorBase):
                 result = result.as_subclass(cls)
 
         return result
+
+    def _clone_outer_tensor(
+        self: Self,
+        *,
+        memory_format: torch.memory_format | None = None,
+    ) -> Self:
+        """
+        Create a fresh outer shell for a clone.
+
+        This copies observable outer metadata only. It does not copy storage offset or
+        storage size, matching plain tensor clone behavior. Advanced dispatch
+        configuration is subclass-specific and is not recoverable from the shell.
+
+        Args:
+            memory_format: The requested memory format, if any.
+
+        Returns:
+            A fresh outer wrapper shell without initialized Python fields.
+
+        Raises:
+            RuntimeError: If the memory format is incompatible with the outer size.
+
+        """
+        return type(self)._make_outer_tensor(
+            size=self.size(),
+            strides=self.outer_stride(memory_format=memory_format),
+            memory_format=memory_format,
+            dtype=self.dtype,
+            layout=self.layout,
+            device=self.device,
+            requires_grad=self.requires_grad,
+        )
 
 
 implements = MokitWrapperTensorBase.implements

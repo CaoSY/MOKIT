@@ -3813,6 +3813,112 @@ def test_outer_stride_rejects_incompatible_shape() -> None:
         wrapper.outer_stride(memory_format=torch.channels_last)
 
 
+# ------------------------------------------------------------------------------
+# _make_outer_tensor
+# ------------------------------------------------------------------------------
+
+
+def test_make_outer_tensor_builds_shell_with_explicit_metadata() -> None:
+    """Test that _make_outer_tensor builds a shell without initializing fields."""
+    wrapper = _Wrapper._make_outer_tensor(
+        size=(2, 3),
+        strides=(1, 2),
+        dtype=torch.float64,
+        device=torch.device("cpu"),
+        requires_grad=True,
+    )
+
+    assert type(wrapper) is _Wrapper
+    assert wrapper.shape == (2, 3)
+    assert wrapper.stride() == (1, 2)
+    assert wrapper.dtype is torch.float64
+    assert wrapper.device == torch.device("cpu")
+    assert wrapper.requires_grad
+    assert vars(wrapper) == {}
+
+
+def test_make_outer_tensor_forwards_storage_metadata() -> None:
+    """Test that _make_outer_tensor forwards storage offset and size."""
+    wrapper = _Wrapper._make_outer_tensor(
+        size=(2, 3),
+        strides=(3, 1),
+        dtype=torch.float32,
+        storage_offset=2,
+        storage_size=0,
+    )
+
+    assert wrapper.storage_offset() == 2
+    assert wrapper.untyped_storage().size() == 0
+
+
+def test_make_outer_tensor_forwards_layout() -> None:
+    """Test that _make_outer_tensor forwards the outer layout."""
+    wrapper = _Wrapper._make_outer_tensor(
+        size=(4,),
+        strides=(1,),
+        dtype=torch.float32,
+        layout=torch.sparse_coo,
+    )
+
+    assert wrapper.layout is torch.sparse_coo
+
+
+# ------------------------------------------------------------------------------
+# _clone_outer_tensor
+# ------------------------------------------------------------------------------
+
+
+def test_clone_outer_tensor_copies_observable_metadata() -> None:
+    """Test that _clone_outer_tensor copies observable outer metadata without fields."""
+    wrapper = _Wrapper(torch.arange(6, dtype=torch.float32).reshape(2, 3), requires_grad=True)
+
+    shell = wrapper._clone_outer_tensor()
+
+    assert type(shell) is _Wrapper
+    assert shell is not wrapper
+    assert shell.shape == wrapper.shape
+    assert shell.stride() == wrapper.stride()
+    assert shell.dtype is wrapper.dtype
+    assert shell.device == wrapper.device
+    assert shell.layout is wrapper.layout
+    assert shell.requires_grad
+    assert vars(shell) == {}
+
+
+def test_clone_outer_tensor_applies_memory_format() -> None:
+    """Test that _clone_outer_tensor applies the requested memory format."""
+    wrapper = _Wrapper(torch.ones(2, 3))
+
+    shell = wrapper._clone_outer_tensor(memory_format=torch.contiguous_format)
+
+    assert shell.stride() == (3, 1)
+
+
+def test_clone_outer_tensor_preserves_non_strided_layout() -> None:
+    """Test that _clone_outer_tensor preserves a non-strided layout."""
+    wrapper = _Wrapper(torch.arange(4, dtype=torch.float32), layout=torch.sparse_coo)
+
+    shell = wrapper._clone_outer_tensor()
+
+    assert shell.layout is torch.sparse_coo
+
+
+def test_clone_outer_tensor_resets_storage_offset_and_derives_storage_size() -> None:
+    """Test that _clone_outer_tensor follows plain clone storage semantics."""
+    wrapper = _Wrapper._make_outer_tensor(
+        size=(4,),
+        strides=(1,),
+        dtype=torch.float32,
+        storage_offset=4,
+        storage_size=0,
+    )
+
+    shell = wrapper._clone_outer_tensor()
+
+    assert shell.storage_offset() == 0
+    assert shell.untyped_storage().size() == 16
+
+
 # ==============================================================================
 # Clone handlers
 # ==============================================================================
