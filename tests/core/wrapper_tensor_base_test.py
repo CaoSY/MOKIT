@@ -4113,6 +4113,35 @@ def test_clone_default_handles_empty_wrapper() -> None:
     assert cloned.stride() == wrapper.stride()
 
 
+@pytest.mark.parametrize(
+    "layout",
+    [
+        pytest.param(torch.sparse_coo, id="sparse_coo"),
+        pytest.param(cast(Any, torch)._mkldnn, id="mkldnn"),
+    ],
+)
+def test_clone_default_preserves_non_strided_layout(layout: torch.layout) -> None:
+    """Test that clone.default preserves a non-strided outer layout."""
+    wrapper = _Wrapper(torch.arange(4, dtype=torch.float32), layout=layout)
+
+    cloned = torch.ops.aten.clone.default(wrapper)
+
+    assert cloned.layout is layout
+    assert cloned.payload is not wrapper.payload
+    assert torch.equal(cloned.payload, wrapper.payload)
+
+
+def test_clone_default_resets_storage_offset() -> None:
+    """Test that clone.default resets the synthetic outer storage offset."""
+    shared = torch.arange(4, dtype=torch.float32)
+    wrapper = _AliasWrapper(shared, shared, storage_offset=2)
+
+    cloned = torch.ops.aten.clone.default(wrapper)
+
+    assert cloned.storage_offset() == 0
+    assert cloned.left is cloned.right
+
+
 def test_clone_default_rejects_dispatch_class_mismatch() -> None:
     """Test that clone.default rejects a mismatched dispatch class."""
     handler = MokitWrapperTensorBase._ATEN_OP_TABLE[torch.ops.aten.clone.default]
@@ -5016,6 +5045,35 @@ def test_to_copy_default_handles_empty_wrapper() -> None:
     assert copied is not wrapper
     assert copied.shape == wrapper.shape
     assert copied.stride() == (12, 1, 6, 3)
+
+
+@pytest.mark.parametrize(
+    "layout",
+    [
+        pytest.param(torch.sparse_coo, id="sparse_coo"),
+        pytest.param(cast(Any, torch)._mkldnn, id="mkldnn"),
+    ],
+)
+def test_to_copy_default_preserves_non_strided_layout(layout: torch.layout) -> None:
+    """Test that _to_copy.default preserves a non-strided outer layout."""
+    wrapper = _Wrapper(torch.arange(4, dtype=torch.float32), layout=layout)
+
+    copied = torch.ops.aten._to_copy.default(wrapper)
+
+    assert copied.layout is layout
+    assert copied.payload is not wrapper.payload
+    assert torch.equal(copied.payload, wrapper.payload)
+
+
+def test_to_copy_default_resets_storage_offset() -> None:
+    """Test that _to_copy.default resets the synthetic outer storage offset."""
+    shared = torch.arange(4, dtype=torch.float32)
+    wrapper = _AliasWrapper(shared, shared, storage_offset=2)
+
+    copied = torch.ops.aten._to_copy.default(wrapper)
+
+    assert copied.storage_offset() == 0
+    assert copied.left is copied.right
 
 
 @pytest.mark.parametrize(

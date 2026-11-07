@@ -405,13 +405,15 @@ class MokitWrapperTensorBase(MokitTensorBase):
     ``_make_outer_tensor`` is a classmethod and the eventual creator of the outer shell;
     its default implementation forwards its arguments to
     ``torch.Tensor._make_wrapper_subclass``. Both ``__new__`` and ``_clone_outer_tensor``
-    delegate to it, so overriding ``_make_outer_tensor`` changes shell construction for
-    both new construction and cloning.
+    delegate to it, and the ``_to_copy.default`` handler uses it directly. Overriding
+    ``_make_outer_tensor`` changes shell construction for new construction, cloning, and
+    ``_to_copy``.
 
     ``_clone_outer_tensor`` is an instance method that reads observable outer metadata from
     ``self`` and delegates to ``type(self)._make_outer_tensor``. The
-    ``aten.clone.default`` handler will use ``_clone_outer_tensor`` to create the clone's outer
-    shell, then clone the inner tensors and initialize the Python fields.
+    ``aten.clone.default`` handler uses ``_clone_outer_tensor`` to create the clone's
+    outer shell, forwards ``aten.clone.default`` to the inner tensors, and initializes the
+    Python fields.
 
     The default ``_clone_outer_tensor`` copies only observable metadata and does not carry
     ``storage_offset`` or ``storage_size``, matching plain tensor clone behavior. It also
@@ -1336,10 +1338,12 @@ def _[WrapperType: MokitWrapperTensorBase](
 
     Metadata is passed through by reference, not deep-copied. The outer size is preserved.
     The outer stride is preserved for ``None`` or ``torch.preserve_format``; for an
-    explicit memory format it is recomputed from the requested format.
+    explicit memory format it is recomputed from the requested format. The outer layout
+    and other observable shell metadata are preserved by ``_clone_outer_tensor``. Storage
+    offset and storage size are reset as for a plain tensor clone.
 
     Args:
-        cls: Runtime wrapper class whose ``__tensor_unflatten__`` reconstructs the result.
+        cls: Runtime wrapper class used to construct the clone.
         func: The ``aten.clone.default`` operator.
         types: Participating dispatch types.
         self: The wrapper to clone.
@@ -1369,10 +1373,19 @@ def _[WrapperType: MokitWrapperTensorBase](
         for name in group:
             cloned_inner_tensors[name] = cloned
 
-    outer_size = self.size()
-    outer_stride = self.outer_stride(memory_format=memory_format)
+    outer_tensor = self._clone_outer_tensor(memory_format=memory_format)
 
-    return cls.__tensor_unflatten__(cloned_inner_tensors, self.metadata, outer_size, outer_stride)
+    initializer = cast(Callable[..., None], outer_tensor.__init__)
+    initializer(
+        *(cloned_inner_tensors[name] for name in cls.positional_inner_tensor_names),
+        *self.positional_metadata,
+        outer_size=outer_tensor.size(),
+        outer_stride=outer_tensor.stride(),
+        **{name: cloned_inner_tensors[name] for name in cls.keyword_inner_tensor_names},
+        **self.keyword_metadata,
+    )
+
+    return outer_tensor
 
 
 @implements(torch.ops.aten.clone.out)
@@ -1605,17 +1618,16 @@ def _[WrapperType: MokitWrapperTensorBase](
     omit the argument the subclass has already handled. The base handler only applies the
     values it receives.
 
-    The new wrapper is constructed through ``__tensor_unflatten__``; the base does not
-    pass dtype, device, layout, or pin-memory state to the constructor. Subclasses must
-    ensure their constructor infers those native attributes from the transformed inner
-    tensors or class rules. Consequently, an empty wrapper cannot change its native
-    attributes through this handler. The base also assumes all inner tensors share the
-    outer device; heterogeneous wrappers must override the handler. Explicit
-    memory-format conversion assumes a strided wrapper and compatible inner ranks, and
-    unsupported native conversions propagate their errors.
+    The new outer shell is created by ``_make_outer_tensor`` with the target device,
+    outer size and stride, dtype, layout, and requires-grad state. The Python fields are
+    then initialized directly on that shell. Storage offset and storage size follow plain
+    copy semantics, and non-strided layouts are preserved. The base assumes all inner
+    tensors share the outer device; heterogeneous wrappers must override the handler.
+    Explicit memory-format conversion assumes a strided wrapper and compatible inner
+    ranks, and unsupported native conversions propagate their errors.
 
     Args:
-        cls: Runtime wrapper class whose ``__tensor_unflatten__`` reconstructs the result.
+        cls: Runtime wrapper class used to construct the copy.
         func: The ``aten._to_copy.default`` operator.
         types: Participating dispatch types.
         self: The wrapper to copy.
@@ -1668,7 +1680,26 @@ def _[WrapperType: MokitWrapperTensorBase](
     new_inner_tensors = {
         name: new_unique_tensors[group_id] for group_id, group in enumerate(field_aliasing_group) for name in group
     }
-    outer_size = self.size()
-    outer_stride = self.outer_stride(memory_format=memory_format)
 
-    return cls.__tensor_unflatten__(new_inner_tensors, self.metadata, outer_size, outer_stride)
+    target_device = self.device if device is None else device
+    outer_tensor = cls._make_outer_tensor(
+        size=self.size(),
+        strides=self.outer_stride(memory_format=memory_format),
+        memory_format=memory_format,
+        dtype=self.dtype,
+        layout=self.layout,
+        device=target_device,
+        requires_grad=self.requires_grad,
+    )
+
+    initializer = cast(Callable[..., None], outer_tensor.__init__)
+    initializer(
+        *(new_inner_tensors[name] for name in cls.positional_inner_tensor_names),
+        *self.positional_metadata,
+        outer_size=outer_tensor.size(),
+        outer_stride=outer_tensor.stride(),
+        **{name: new_inner_tensors[name] for name in cls.keyword_inner_tensor_names},
+        **self.keyword_metadata,
+    )
+
+    return outer_tensor
