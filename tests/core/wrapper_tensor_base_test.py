@@ -3864,6 +3864,38 @@ def test_make_outer_tensor_forwards_layout() -> None:
     assert wrapper.layout is torch.sparse_coo
 
 
+def test_make_outer_tensor_override_is_used_by_construction_clone_and_to_copy() -> None:
+    """Test that overriding _make_outer_tensor is honored by every shell-producing path."""
+    calls: list[dict[str, Any]] = []
+
+    class _TrackingWrapper(_DefaultNewWrapper):
+        @classmethod
+        def _make_outer_tensor(cls, *args: Any, **kwargs: Any) -> Self:
+            calls.append(kwargs)
+            return super()._make_outer_tensor(*args, **kwargs)
+
+    wrapper = _TrackingWrapper(
+        torch.arange(4, dtype=torch.float32),
+        outer_size=(4,),
+        outer_stride=(1,),
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["size"] == (4,)
+    assert type(wrapper) is _TrackingWrapper
+
+    cloned = torch.ops.aten.clone.default(wrapper)
+
+    assert len(calls) == 2
+    assert type(cloned) is _TrackingWrapper
+
+    copied = torch.ops.aten._to_copy.default(wrapper, device=torch.device("meta"))
+
+    assert len(calls) == 3
+    assert type(copied) is _TrackingWrapper
+    assert copied.device == torch.device("meta")
+
+
 # ------------------------------------------------------------------------------
 # _clone_outer_tensor
 # ------------------------------------------------------------------------------
@@ -3918,6 +3950,32 @@ def test_clone_outer_tensor_resets_storage_offset_and_derives_storage_size() -> 
 
     assert shell.storage_offset() == 0
     assert shell.untyped_storage().size() == 16
+
+
+def test_clone_default_honors_clone_outer_tensor_override() -> None:
+    """Test that clone.default routes through an overridden _clone_outer_tensor."""
+    calls: list[torch.memory_format | None] = []
+
+    class _TrackingCloneWrapper(_DefaultNewWrapper):
+        def _clone_outer_tensor(
+            self,
+            *,
+            memory_format: torch.memory_format | None = None,
+        ) -> Self:
+            calls.append(memory_format)
+            return super()._clone_outer_tensor(memory_format=memory_format)
+
+    wrapper = _TrackingCloneWrapper(
+        torch.arange(4, dtype=torch.float32),
+        outer_size=(4,),
+        outer_stride=(1,),
+    )
+
+    cloned = torch.ops.aten.clone.default(wrapper, memory_format=torch.contiguous_format)
+
+    assert calls == [torch.contiguous_format]
+    assert type(cloned) is _TrackingCloneWrapper
+    assert cloned.stride() == (1,)
 
 
 # ==============================================================================
