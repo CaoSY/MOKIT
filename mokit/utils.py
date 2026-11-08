@@ -3,8 +3,8 @@
 
 """General-purpose utility helpers for MOKIT."""
 
-from collections.abc import Callable, Hashable, Iterable
-from typing import Any, Protocol, overload
+from collections.abc import Callable, Hashable, Iterable, Sequence
+from typing import Any, Protocol, cast, overload
 
 
 def _group_keys_by_value_id[KeyType, ValueType, IDType: Hashable](
@@ -171,4 +171,59 @@ def apply_fn[SourceType, DestType, ResultType](
         return [func(src_val, *args, dest=dest_val, **kwargs) for (src_val, dest_val) in zip(src, dest, strict=True)]
 
 
-__all__ = ["apply_fn", "group_by_id"]
+def apply_fn_by_id[SrcType, SrcIDType: Hashable, DestType, DestIDType: Hashable, ResultType](
+    src: Sequence[SrcType],
+    func: Callable[..., ResultType],
+    *args: Any,
+    dest: Sequence[DestType] | None = None,
+    src_idfunc: Callable[[SrcType], SrcIDType] = id,
+    dest_idfunc: Callable[[DestType], DestIDType] = id,
+    **kwargs: Any,
+) -> list[ResultType]:
+    """
+    Apply a callable once per identity group and restore source order.
+
+    Values sharing the same ``src_idfunc`` identity share one result. If ``dest`` is
+    provided, ``dest_idfunc`` defines destination identities, and its group topology must
+    match the source grouping. The callable receives one representative destination per
+    group.
+
+    Args:
+        src: Source values.
+        func: Callable applied once per source identity group.
+        *args: Positional arguments forwarded to ``func``.
+        dest: Optional destination values with the same grouping topology as ``src``.
+        src_idfunc: Callable defining each source value's identity. Defaults to ``id``.
+        dest_idfunc: Callable defining each destination value's identity. Defaults to ``id``.
+        **kwargs: Keyword arguments forwarded to ``func``.
+
+    Returns:
+        Results aligned with the original ``src`` sequence.
+
+    Raises:
+        ValueError: If ``dest`` grouping does not match ``src`` grouping.
+
+    """
+    src_groups = group_by_id(src, idfunc=src_idfunc)
+
+    if dest is None:
+        unique_dest = None
+    else:
+        dest_groups = group_by_id(dest, idfunc=dest_idfunc)
+        if tuple(src_groups.values()) != tuple(dest_groups.values()):
+            raise ValueError("src and dest grouping differ")
+        unique_dest = (dest[group[0]] for group in dest_groups.values())
+
+    unique_src = (src[group[0]] for group in src_groups.values())
+
+    unique_output = apply_fn(unique_src, func, *args, dest=unique_dest, **kwargs)
+
+    output: list[ResultType | None] = [None] * len(src)
+    for value, group in zip(unique_output, src_groups.values(), strict=True):
+        for index in group:
+            output[index] = value
+
+    return cast(list[ResultType], output)
+
+
+__all__ = ["apply_fn", "apply_fn_by_id", "group_by_id"]
