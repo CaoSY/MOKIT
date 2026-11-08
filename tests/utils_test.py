@@ -3,9 +3,11 @@
 
 """Tests for :mod:`mokit.utils`."""
 
+from typing import Any
+
 import pytest
 
-from mokit.utils import apply_fn
+from mokit.utils import apply_fn, group_by_id
 
 # ==============================================================================
 # apply_fn
@@ -87,3 +89,117 @@ def test_apply_fn_preserves_generic_result_types() -> None:
         return value, str(value)
 
     assert apply_fn([1, 2], describe) == [(1, "1"), (2, "2")]
+
+
+# ==============================================================================
+# group_by_id
+# ==============================================================================
+
+
+def test_group_by_id_groups_indices_by_object_identity() -> None:
+    """Test that indices are grouped by exact object identity."""
+    first = object()
+    second = object()
+    third = object()
+
+    groups = group_by_id([first, second, first, third, second])
+
+    assert list(groups) == [id(first), id(second), id(third)]
+    assert groups == {
+        id(first): [0, 2],
+        id(second): [1, 4],
+        id(third): [3],
+    }
+
+
+def test_group_by_id_preserves_first_occurrence_order() -> None:
+    """Test that group and member order follow first occurrence."""
+    values = ["b", "a", "b", "c", "a", "d"]
+
+    groups = group_by_id(values, idfunc=lambda value: value)
+
+    assert list(groups) == ["b", "a", "c", "d"]
+    assert groups == {
+        "b": [0, 2],
+        "a": [1, 4],
+        "c": [3],
+        "d": [5],
+    }
+
+
+def test_group_by_id_keeps_equal_but_distinct_objects_separate() -> None:
+    """Test that equal objects with different identities form separate groups."""
+    left: list[int] = []
+    right: list[int] = []
+
+    groups = group_by_id([left, right, left])
+
+    assert list(groups) == [id(left), id(right)]
+    assert groups == {
+        id(left): [0, 2],
+        id(right): [1],
+    }
+
+
+def test_group_by_id_groups_caller_keys_by_object_identity() -> None:
+    """Test that caller-provided keys are grouped by object identity."""
+    first = object()
+    second = object()
+
+    groups = group_by_id([first, second, first], ["left", "middle", "right"])
+
+    assert list(groups) == [id(first), id(second)]
+    assert groups == {
+        id(first): ["left", "right"],
+        id(second): ["middle"],
+    }
+
+
+def test_group_by_id_uses_custom_idfunc() -> None:
+    """Test that a custom idfunc defines the grouping identity."""
+    groups = group_by_id([1, 2, 3, 4], idfunc=lambda value: value % 2)
+
+    assert list(groups) == [1, 0]
+    assert groups == {1: [0, 2], 0: [1, 3]}
+
+
+def test_group_by_id_uses_custom_idfunc_with_caller_keys() -> None:
+    """Test that custom identity grouping also applies to caller keys."""
+    groups = group_by_id(
+        [1, 2, 3, 4],
+        ["a", "b", "c", "d"],
+        idfunc=lambda value: value % 2,
+    )
+
+    assert list(groups) == [1, 0]
+    assert groups == {1: ["a", "c"], 0: ["b", "d"]}
+
+
+def test_group_by_id_handles_empty_inputs() -> None:
+    """Test that empty values produce no groups."""
+    assert group_by_id([]) == {}
+    assert group_by_id([], keys=[]) == {}
+
+
+@pytest.mark.parametrize(
+    ("values", "keys"),
+    [
+        pytest.param([1], [1, 2], id="keys_too_long"),
+        pytest.param([1, 2], [1], id="keys_too_short"),
+    ],
+)
+def test_group_by_id_rejects_length_mismatch(values: list[int], keys: list[int]) -> None:
+    """Test that values and keys must have equal lengths."""
+    with pytest.raises(ValueError):
+        group_by_id(values, keys)
+
+
+def test_group_by_id_rejects_unhashable_identity() -> None:
+    """Test that an idfunc returning an unhashable value is rejected."""
+
+    def unhashable_idfunc(_value: int) -> Any:
+        """Return an unhashable identity."""
+        return []
+
+    with pytest.raises(TypeError):
+        group_by_id([1], idfunc=unhashable_idfunc)
