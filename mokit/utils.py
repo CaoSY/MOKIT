@@ -3,7 +3,7 @@
 
 """General-purpose utility helpers for MOKIT."""
 
-from collections.abc import Callable, Hashable, Iterable, Sequence
+from collections.abc import Callable, Hashable, Iterable, Iterator, Sequence
 from typing import Any, Protocol, cast, overload
 
 
@@ -123,7 +123,7 @@ def apply_fn[SourceType, ResultType](
     *args: Any,
     dest: None = None,
     **kwargs: Any,
-) -> list[ResultType]: ...
+) -> Iterator[ResultType]: ...
 
 
 @overload
@@ -133,7 +133,7 @@ def apply_fn[SourceType, DestType, ResultType](
     *args: Any,
     dest: Iterable[DestType],
     **kwargs: Any,
-) -> list[ResultType]: ...
+) -> Iterator[ResultType]: ...
 
 
 def apply_fn[SourceType, DestType, ResultType](
@@ -142,16 +142,18 @@ def apply_fn[SourceType, DestType, ResultType](
     *args: Any,
     dest: Iterable[DestType] | None = None,
     **kwargs: Any,
-) -> list[ResultType]:
+) -> Iterator[ResultType]:
     """
-    Apply a callable to each source value.
+    Lazily apply a callable to each source value.
 
     When ``dest`` is ``None``, the callable is invoked without a destination argument.
     Otherwise, source and destination values are paired by iteration order and the
     callable receives the destination as its ``dest`` keyword argument. This supports
     in-place-style callables, but no in-place behavior is required or enforced: the
     callable may modify ``dest`` and return it, return another value, or return ``None``.
-    The returned list contains exactly the callable's return values.
+    The returned iterator yields exactly the callable's return values. Because evaluation
+    is lazy, an in-place modification of ``dest`` happens only when the iterator reaches
+    that source slot; if the iterator is never consumed, the modification never happens.
 
     Args:
         src: The source values passed as the callable's first argument.
@@ -161,18 +163,20 @@ def apply_fn[SourceType, DestType, ResultType](
         **kwargs: Keyword arguments forwarded to the callable.
 
     Returns:
-        The results returned by the callable, in source iteration order. When ``dest`` is
-        provided, these are not necessarily the destination values.
+        An iterator over the callable results, in source iteration order. When ``dest``
+        is provided, these are not necessarily the destination values.
 
     Raises:
-        ValueError: If ``dest`` and ``src`` have different lengths.
-        Exception: Any exception raised by the callable propagates unchanged.
+        ValueError: If ``dest`` and ``src`` have different lengths when the iterator is
+            consumed.
+        Exception: Any exception raised by the callable propagates unchanged during
+            iteration.
 
     """
     if dest is None:
-        return [func(src_val, *args, **kwargs) for src_val in src]
+        return (func(src_val, *args, **kwargs) for src_val in src)
     else:
-        return [func(src_val, *args, dest=dest_val, **kwargs) for (src_val, dest_val) in zip(src, dest, strict=True)]
+        return (func(src_val, *args, dest=dest_val, **kwargs) for (src_val, dest_val) in zip(src, dest, strict=True))
 
 
 def apply_fn_by_id[SrcType, SrcIDType: Hashable, DestType, DestIDType: Hashable, ResultType](

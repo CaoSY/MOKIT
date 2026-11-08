@@ -24,10 +24,28 @@ def test_apply_fn_maps_source_values_without_destinations() -> None:
         calls.append((source, scale, offset))
         return source * scale + offset
 
-    results = apply_fn(src, transform, 2, offset=1)
+    results = list(apply_fn(src, transform, 2, offset=1))
 
     assert results == [3, 5, 7]
     assert calls == [(1, 2, 1), (2, 2, 1), (3, 2, 1)]
+
+
+def test_apply_fn_is_lazy() -> None:
+    """Test that apply_fn defers callable execution until iteration."""
+    calls: list[int] = []
+
+    def transform(value: int) -> int:
+        """Record the value and return it."""
+        calls.append(value)
+        return value
+
+    results = apply_fn([1, 2], transform)
+
+    assert calls == []
+    assert next(results) == 1
+    assert calls == [1]
+    assert list(results) == [2]
+    assert calls == [1, 2]
 
 
 def test_apply_fn_pairs_destinations_and_forwards_dest_keyword() -> None:
@@ -39,7 +57,7 @@ def test_apply_fn_pairs_destinations_and_forwards_dest_keyword() -> None:
         """Combine a source, destination, and scale factor."""
         return f"{source}{dest * scale}"
 
-    results = apply_fn(src, transform, dest=dest, scale=2)
+    results = list(apply_fn(src, transform, dest=dest, scale=2))
 
     assert results == ["a20", "b40"]
 
@@ -52,7 +70,7 @@ def test_apply_fn_allows_in_place_callables_returning_none() -> None:
         """Assign the source value to the destination."""
         dest["value"] = source
 
-    results = apply_fn([1, 2], assign, dest=destinations)
+    results = list(apply_fn([1, 2], assign, dest=destinations))
 
     assert results == [None, None]
     assert [destination["value"] for destination in destinations] == [1, 2]
@@ -67,23 +85,23 @@ def test_apply_fn_returns_callable_results_not_destinations() -> None:
         dest["value"] = source
         return source
 
-    results = apply_fn([1, 2], assign_and_return_source, dest=destinations)
+    results = list(apply_fn([1, 2], assign_and_return_source, dest=destinations))
 
     assert results == [1, 2]
     assert results[0] is not destinations[0]
     assert [destination["value"] for destination in destinations] == [1, 2]
 
 
-def test_apply_fn_returns_empty_list_for_empty_sources() -> None:
-    """Test that apply_fn returns an empty list for empty sources."""
+def test_apply_fn_returns_empty_iterator_for_empty_sources() -> None:
+    """Test that apply_fn returns an empty iterator for empty sources."""
 
     def identity(value: int) -> int:
         """Return the value unchanged."""
         return value
 
-    assert apply_fn([], identity) == []
-    assert apply_fn([], identity, dest=None) == []
-    assert apply_fn([], identity, dest=[]) == []
+    assert list(apply_fn([], identity)) == []
+    assert list(apply_fn([], identity, dest=None)) == []
+    assert list(apply_fn([], identity, dest=[])) == []
 
 
 def test_apply_fn_rejects_destination_length_mismatch() -> None:
@@ -97,7 +115,7 @@ def test_apply_fn_rejects_destination_length_mismatch() -> None:
     dest = (value for value in (10,))
 
     with pytest.raises(ValueError):
-        apply_fn(src, combine, dest=dest)
+        list(apply_fn(src, combine, dest=dest))
 
 
 def test_apply_fn_propagates_exceptions() -> None:
@@ -108,7 +126,7 @@ def test_apply_fn_propagates_exceptions() -> None:
         raise ValueError("failure")
 
     with pytest.raises(ValueError, match="failure"):
-        apply_fn([1], fail)
+        list(apply_fn([1], fail))
 
 
 def test_apply_fn_preserves_generic_result_types() -> None:
@@ -118,7 +136,7 @@ def test_apply_fn_preserves_generic_result_types() -> None:
         """Return a tuple containing the value and its string form."""
         return value, str(value)
 
-    assert apply_fn([1, 2], describe) == [(1, "1"), (2, "2")]
+    assert list(apply_fn([1, 2], describe)) == [(1, "1"), (2, "2")]
 
 
 # ==============================================================================
