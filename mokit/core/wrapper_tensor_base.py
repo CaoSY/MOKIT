@@ -5,7 +5,7 @@
 
 import functools
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Any, ClassVar, Literal, Protocol, Self, cast, overload
 
 import torch
@@ -1167,10 +1167,10 @@ class MokitWrapperTensorBase(MokitTensorBase):
         inner_tensors: Mapping[str, torch.Tensor | CustomClassBase],
         metadata: Mapping[str, Any],
     ) -> tuple[
-        tuple[torch.Tensor | CustomClassBase, ...],
-        tuple[Any, ...],
-        dict[str, torch.Tensor | CustomClassBase],
-        dict[str, Any],
+        Iterator[torch.Tensor | CustomClassBase],
+        Iterator[Any],
+        Mapping[str, torch.Tensor | CustomClassBase],
+        Mapping[str, Any],
     ]:
         """
         Collect the four constructor field groups from flattened data.
@@ -1180,13 +1180,14 @@ class MokitWrapperTensorBase(MokitTensorBase):
             metadata: The metadata mapping from ``__tensor_flatten__``.
 
         Returns:
-            Positional inner tensors, positional metadata, keyword inner tensors, and
-            keyword metadata, in constructor-protocol order.
+            Iterators over positional inner tensors and positional metadata, followed by
+            mappings of keyword inner tensors and keyword metadata, in
+            constructor-protocol order.
 
         """
         return (
-            tuple(inner_tensors[name] for name in cls.positional_inner_tensor_names),
-            tuple(metadata[name] for name in cls.positional_metadata_names),
+            (inner_tensors[name] for name in cls.positional_inner_tensor_names),
+            (metadata[name] for name in cls.positional_metadata_names),
             {name: inner_tensors[name] for name in cls.keyword_inner_tensor_names},
             {name: metadata[name] for name in cls.keyword_metadata_names},
         )

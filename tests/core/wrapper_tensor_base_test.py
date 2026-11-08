@@ -3654,9 +3654,10 @@ def test_constructor_field_groups_collects_all_field_kinds() -> None:
     )
     positional_inner_tensors, positional_metadata, keyword_inner_tensors, keyword_metadata = groups
 
-    assert len(positional_inner_tensors) == 1
-    assert positional_inner_tensors[0] is payload
-    assert positional_metadata == (tag,)
+    assert iter(positional_inner_tensors) is positional_inner_tensors
+    assert iter(positional_metadata) is positional_metadata
+    assert tuple(positional_inner_tensors) == (payload,)
+    assert tuple(positional_metadata) == (tag,)
     assert keyword_inner_tensors == {"bias": bias}
     assert keyword_metadata == {"note": note}
 
@@ -3669,17 +3670,22 @@ def test_constructor_field_groups_uses_declared_field_order() -> None:
     groups = _AliasWrapper._constructor_field_groups({"right": right, "left": left}, {})
     positional_inner_tensors, positional_metadata, keyword_inner_tensors, keyword_metadata = groups
 
-    assert len(positional_inner_tensors) == 2
-    assert positional_inner_tensors[0] is left
-    assert positional_inner_tensors[1] is right
-    assert positional_metadata == ()
+    assert tuple(positional_inner_tensors) == (left, right)
+    assert tuple(positional_metadata) == ()
     assert keyword_inner_tensors == {}
     assert keyword_metadata == {}
 
 
 def test_constructor_field_groups_handles_empty_wrapper() -> None:
     """Test that _constructor_field_groups returns empty groups for a fieldless wrapper."""
-    assert _EmptyWrapper._constructor_field_groups({}, {}) == ((), (), {}, {})
+    positional_inner_tensors, positional_metadata, keyword_inner_tensors, keyword_metadata = (
+        _EmptyWrapper._constructor_field_groups({}, {})
+    )
+
+    assert tuple(positional_inner_tensors) == ()
+    assert tuple(positional_metadata) == ()
+    assert keyword_inner_tensors == {}
+    assert keyword_metadata == {}
 
 
 # ------------------------------------------------------------------------------
