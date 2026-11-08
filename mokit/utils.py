@@ -4,7 +4,7 @@
 """General-purpose utility helpers for MOKIT."""
 
 from collections.abc import Callable, Hashable, Iterable, Iterator, Sequence
-from typing import Any, Protocol, cast, overload
+from typing import Any, cast, overload
 
 
 def _group_keys_by_value_id[KeyType, ValueType, IDType: Hashable](
@@ -89,51 +89,6 @@ def group_by_id[KeyType, ValueType, IDType: Hashable](
     if keys is None:
         return _group_keys_by_value_id(enumerate(values), idfunc)
     return _group_keys_by_value_id(zip(keys, values, strict=True), idfunc)
-
-
-class _SourceFunc[SourceType, ResultType](Protocol):
-    """The protocol for the callable passed to ``apply_fn`` without destinations."""
-
-    def __call__(
-        self,
-        source: SourceType,
-        *args: Any,
-        **kwargs: Any,
-    ) -> ResultType:
-        """Call the function with a source value."""
-
-
-class _DestFunc[SourceType, DestType, ResultType](Protocol):
-    """The protocol for the callable passed to ``apply_fn`` with destinations."""
-
-    def __call__(
-        self,
-        source: SourceType,
-        *args: Any,
-        dest: DestType,
-        **kwargs: Any,
-    ) -> ResultType:
-        """Call the function with a source value and destination."""
-
-
-@overload
-def apply_fn[SourceType, ResultType](
-    src: Iterable[SourceType],
-    func: _SourceFunc[SourceType, ResultType],
-    *args: Any,
-    dest: None = None,
-    **kwargs: Any,
-) -> Iterator[ResultType]: ...
-
-
-@overload
-def apply_fn[SourceType, DestType, ResultType](
-    src: Iterable[SourceType],
-    func: _DestFunc[SourceType, DestType, ResultType],
-    *args: Any,
-    dest: Iterable[DestType],
-    **kwargs: Any,
-) -> Iterator[ResultType]: ...
 
 
 def apply_fn[SourceType, DestType, ResultType](
