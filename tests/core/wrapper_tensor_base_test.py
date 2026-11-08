@@ -3375,19 +3375,32 @@ def test_metadata_returns_empty_mapping_for_empty_wrapper() -> None:
 
 
 def test_positional_metadata_returns_positional_values() -> None:
-    """Test that positional_metadata returns the positional metadata values."""
+    """Test that positional_metadata yields the positional metadata values by reference."""
     tag = ["tag"]
     wrapper = _Wrapper(torch.zeros(2, 3), tag, note={"note": 1})
 
-    positional_metadata = wrapper.positional_metadata
+    positional_metadata = tuple(wrapper.positional_metadata)
 
     assert positional_metadata == (tag,)
     assert positional_metadata[0] is tag
 
 
-def test_positional_metadata_returns_empty_tuple_for_empty_wrapper() -> None:
+def test_positional_metadata_returns_fresh_iterator() -> None:
+    """Test that positional_metadata returns a fresh iterator on each access."""
+    tag = ["tag"]
+    wrapper = _Wrapper(torch.zeros(2, 3), tag, note={"note": 1})
+
+    positional_metadata = wrapper.positional_metadata
+
+    assert iter(positional_metadata) is positional_metadata
+    assert tuple(positional_metadata) == (tag,)
+    assert tuple(positional_metadata) == ()
+    assert tuple(wrapper.positional_metadata) == (tag,)
+
+
+def test_positional_metadata_returns_empty_iterator_for_empty_wrapper() -> None:
     """Test that positional_metadata is empty for a wrapper with no positional metadata."""
-    assert _EmptyWrapper().positional_metadata == ()
+    assert tuple(_EmptyWrapper().positional_metadata) == ()
 
 
 # ------------------------------------------------------------------------------

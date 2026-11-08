@@ -1015,15 +1015,15 @@ class MokitWrapperTensorBase(MokitTensorBase):
         return {name: getattr(self, name) for name in type(self).metadata_names()}
 
     @property
-    def positional_metadata(self: Self) -> tuple[Any, ...]:
+    def positional_metadata(self: Self) -> Iterator[Any]:
         """
-        Return positional metadata values in declaration order.
+        Return an iterator over positional metadata values in declaration order.
 
         Returns:
-            The positional metadata values by reference.
+            An iterator over the positional metadata values by reference.
 
         """
-        return tuple(getattr(self, name) for name in type(self).positional_metadata_names)
+        return (getattr(self, name) for name in type(self).positional_metadata_names)
 
     @property
     def keyword_metadata(self: Self) -> Mapping[str, Any]:
