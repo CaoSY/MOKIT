@@ -715,7 +715,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         """
         cls = type(self)
-        tensor_names = cls.inner_tensor_names()
+        tensor_names = tuple(cls.inner_tensor_names())
         metadata = dict(zip(cls.metadata_names(), self.metadata, strict=True))
         return tensor_names, metadata
 
@@ -976,19 +976,20 @@ class MokitWrapperTensorBase(MokitTensorBase):
         return decorator
 
     @classmethod
-    def inner_tensor_names(cls: type[Self]) -> tuple[str, ...]:
+    def inner_tensor_names(cls: type[Self]) -> Iterator[str]:
         """
-        Return the inner tensor field names in authoritative flatten order.
+        Return an iterator over the inner tensor field names in authoritative flatten order.
 
         The order is ``positional_inner_tensor_names`` followed by
         ``keyword_inner_tensor_names``. Flattening, field aliasing checks, and constructor
-        argument assembly use this order.
+        argument assembly use this order. The class attributes are read when this method
+        is called.
 
         Returns:
-            The flattened inner tensor field names.
+            An iterator over the flattened inner tensor field names.
 
         """
-        return (*cls.positional_inner_tensor_names, *cls.keyword_inner_tensor_names)
+        return itertools.chain(cls.positional_inner_tensor_names, cls.keyword_inner_tensor_names)
 
     @classmethod
     def metadata_names(cls: type[Self]) -> Iterator[str]:
@@ -1394,11 +1395,10 @@ def _[WrapperType: MokitWrapperTensorBase](
 
     self.has_same_attributes(out, strict=True, raise_on_mismatch=True)
 
-    names = cls.inner_tensor_names()
     apply_fn_by_id(
-        [getattr(self, name) for name in names],
+        [getattr(self, name) for name in cls.inner_tensor_names()],
         lambda source, *, dest: func(source, memory_format=memory_format, out=dest),
-        dest=[getattr(out, name) for name in names],
+        dest=[getattr(out, name) for name in cls.inner_tensor_names()],
     )
 
     return out
@@ -1517,11 +1517,10 @@ def _[WrapperType: MokitWrapperTensorBase](
 
     self.has_same_attributes(src, strict=True, raise_on_mismatch=True)
 
-    names = cls.inner_tensor_names()
     apply_fn_by_id(
-        [getattr(src, name) for name in names],
+        [getattr(src, name) for name in cls.inner_tensor_names()],
         lambda source, *, dest: func(dest, source, non_blocking=non_blocking),
-        dest=[getattr(self, name) for name in names],
+        dest=[getattr(self, name) for name in cls.inner_tensor_names()],
     )
 
     return self

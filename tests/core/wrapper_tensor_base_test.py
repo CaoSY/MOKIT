@@ -3442,13 +3442,38 @@ def test_keyword_metadata_returns_empty_mapping_for_empty_wrapper() -> None:
 
 def test_inner_tensor_names_concatenates_positional_and_keyword_names() -> None:
     """Test that inner_tensor_names uses positional-then-keyword declaration order."""
-    assert _Wrapper.inner_tensor_names() == ("payload", "bias")
-    assert _AliasWrapper.inner_tensor_names() == ("left", "right")
+    assert tuple(_Wrapper.inner_tensor_names()) == ("payload", "bias")
+    assert tuple(_AliasWrapper.inner_tensor_names()) == ("left", "right")
 
 
-def test_inner_tensor_names_returns_empty_tuple_for_empty_wrapper() -> None:
+def test_inner_tensor_names_returns_fresh_iterator() -> None:
+    """Test that inner_tensor_names returns a fresh iterator on each access."""
+    names = _Wrapper.inner_tensor_names()
+
+    assert iter(names) is names
+    assert tuple(names) == ("payload", "bias")
+    assert tuple(names) == ()
+    assert tuple(_Wrapper.inner_tensor_names()) == ("payload", "bias")
+
+
+def test_inner_tensor_names_reflects_class_attribute_updates() -> None:
+    """Test that inner_tensor_names reads the current class attributes."""
+
+    class _DynamicInnerWrapper(_EmptyWrapper):
+        """A wrapper whose name tuples are updated after creation."""
+
+        positional_inner_tensor_names = ("payload",)
+
+    assert tuple(_DynamicInnerWrapper.inner_tensor_names()) == ("payload",)
+
+    _DynamicInnerWrapper.keyword_inner_tensor_names = ("bias",)
+
+    assert tuple(_DynamicInnerWrapper.inner_tensor_names()) == ("payload", "bias")
+
+
+def test_inner_tensor_names_returns_empty_iterator_for_empty_wrapper() -> None:
     """Test that inner_tensor_names is empty for a wrapper with no inner tensors."""
-    assert _EmptyWrapper.inner_tensor_names() == ()
+    assert tuple(_EmptyWrapper.inner_tensor_names()) == ()
 
 
 # ------------------------------------------------------------------------------
