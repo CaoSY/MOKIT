@@ -640,6 +640,22 @@ def test_tensor_unflatten_reconstructs_all_field_kinds() -> None:
     assert rebuilt.stride() == (1,)
 
 
+def test_tensor_unflatten_uses_declared_field_order() -> None:
+    """Test that unflatten reads inner tensors by declared field name, not mapping order."""
+    left = torch.tensor([1.0, 2.0])
+    right = torch.tensor([3.0, 4.0])
+
+    rebuilt = _AliasWrapper.__tensor_unflatten__(
+        {"right": right, "left": left},
+        (),
+        (2,),
+        (1,),
+    )
+
+    assert rebuilt.left is left
+    assert rebuilt.right is right
+
+
 def test_tensor_unflatten_forwards_outer_geometry() -> None:
     """Test that unflatten passes outer_size and outer_stride to the constructor."""
     rebuilt = _EmptyWrapper.__tensor_unflatten__({}, (), (4,), (2,))
@@ -3820,58 +3836,6 @@ def test_apply_fn_to_outer_tensor_forwards_arguments() -> None:
     assert type(shell) is _Wrapper
     assert shell.shape == (3, 2)
     assert shell.stride() == (1, 3)
-
-
-# ------------------------------------------------------------------------------
-# _constructor_field_groups
-# ------------------------------------------------------------------------------
-
-
-def test_constructor_field_groups_collects_all_field_kinds() -> None:
-    """Test that _constructor_field_groups collects all four constructor groups."""
-    payload = torch.tensor([1.0, 2.0])
-    bias = torch.tensor([3.0, 4.0])
-    tag = ["tag"]
-    note = {"note": 1}
-
-    groups = _Wrapper._constructor_field_groups(
-        {"bias": bias, "payload": payload},
-        (tag, note),
-    )
-    positional_inner_tensors, positional_metadata, keyword_inner_tensors, keyword_metadata = groups
-
-    assert iter(positional_inner_tensors) is positional_inner_tensors
-    assert iter(positional_metadata) is positional_metadata
-    assert tuple(positional_inner_tensors) == (payload,)
-    assert tuple(positional_metadata) == (tag,)
-    assert keyword_inner_tensors == {"bias": bias}
-    assert keyword_metadata == {"note": note}
-
-
-def test_constructor_field_groups_uses_declared_field_order() -> None:
-    """Test that _constructor_field_groups uses declared field order, not mapping order."""
-    left = torch.tensor([1.0, 2.0])
-    right = torch.tensor([3.0, 4.0])
-
-    groups = _AliasWrapper._constructor_field_groups({"right": right, "left": left}, ())
-    positional_inner_tensors, positional_metadata, keyword_inner_tensors, keyword_metadata = groups
-
-    assert tuple(positional_inner_tensors) == (left, right)
-    assert tuple(positional_metadata) == ()
-    assert keyword_inner_tensors == {}
-    assert keyword_metadata == {}
-
-
-def test_constructor_field_groups_handles_empty_wrapper() -> None:
-    """Test that _constructor_field_groups returns empty groups for a fieldless wrapper."""
-    positional_inner_tensors, positional_metadata, keyword_inner_tensors, keyword_metadata = (
-        _EmptyWrapper._constructor_field_groups({}, ())
-    )
-
-    assert tuple(positional_inner_tensors) == ()
-    assert tuple(positional_metadata) == ()
-    assert keyword_inner_tensors == {}
-    assert keyword_metadata == {}
 
 
 # ------------------------------------------------------------------------------

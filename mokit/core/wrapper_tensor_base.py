@@ -743,12 +743,18 @@ class MokitWrapperTensorBase(MokitTensorBase):
             The rebuilt wrapper tensor.
 
         """
-        (
-            inner_tensor_values,
-            metadata_values,
-            keyword_inner_tensor_values,
-            keyword_metadata_values,
-        ) = cls._constructor_field_groups(inner_tensors, metadata)
+        positional_metadata_count = len(cls.positional_metadata_names)
+
+        inner_tensor_values = (inner_tensors[name] for name in cls.positional_inner_tensor_names)
+        metadata_values = (metadata[index] for index in range(positional_metadata_count))
+        keyword_inner_tensor_values = {name: inner_tensors[name] for name in cls.keyword_inner_tensor_names}
+        keyword_metadata_values = dict(
+            zip(
+                cls.keyword_metadata_names,
+                metadata[positional_metadata_count:],
+                strict=True,
+            )
+        )
 
         constructor = cast(Callable[..., Self], cls)
         return constructor(
@@ -1198,45 +1204,6 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         """
         return torch.Tensor._make_wrapper_subclass(cls, *args, **kwargs)
-
-    @classmethod
-    def _constructor_field_groups(
-        cls,
-        inner_tensors: Mapping[str, torch.Tensor | CustomClassBase],
-        metadata: Sequence[Any],
-    ) -> tuple[
-        Iterator[torch.Tensor | CustomClassBase],
-        Iterator[Any],
-        Mapping[str, torch.Tensor | CustomClassBase],
-        Mapping[str, Any],
-    ]:
-        """
-        Collect the four constructor field groups from flattened data.
-
-        Args:
-            inner_tensors: The inner tensors keyed by their flattened names.
-            metadata: The metadata values from ``__tensor_flatten__``.
-
-        Returns:
-            Iterators over positional inner tensors and positional metadata, followed by
-            mappings of keyword inner tensors and keyword metadata, in
-            constructor-protocol order.
-
-        """
-        positional_metadata_count = len(cls.positional_metadata_names)
-
-        return (
-            (inner_tensors[name] for name in cls.positional_inner_tensor_names),
-            (metadata[index] for index in range(positional_metadata_count)),
-            {name: inner_tensors[name] for name in cls.keyword_inner_tensor_names},
-            dict(
-                zip(
-                    cls.keyword_metadata_names,
-                    metadata[positional_metadata_count:],
-                    strict=True,
-                )
-            ),
-        )
 
     def _apply_fn_to_outer_tensor(
         self: Self,
