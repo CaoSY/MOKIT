@@ -1205,6 +1205,44 @@ class MokitWrapperTensorBase(MokitTensorBase):
         """
         return torch.Tensor._make_wrapper_subclass(cls, *args, **kwargs)
 
+    @classmethod
+    def _split_inner_tensor_values(
+        cls: type[Self],
+        values: Iterator[Any] | Sequence[Any],
+    ) -> tuple[Sequence[Any], Mapping[str, Any]]:
+        """
+        Split processed inner tensor values into positional and keyword groups.
+
+        Args:
+            values: The processed inner tensor values in ``inner_tensor_names`` order.
+
+        Returns:
+            The positional inner tensor values and the keyword inner tensor values keyed
+            by field name.
+
+        Raises:
+            ValueError: If ``values`` does not yield one value per declared inner
+                tensor.
+
+        """
+        positional_count = len(cls.positional_inner_tensor_names)
+
+        if isinstance(values, Sequence):
+            positional_inner_tensors = values[:positional_count]
+            remaining_iterator = itertools.islice(values, positional_count, None)
+        else:
+            positional_inner_tensors = tuple(itertools.islice(values, positional_count))
+            remaining_iterator = values
+
+        if len(positional_inner_tensors) != positional_count:
+            raise ValueError(
+                f"expected {positional_count} positional inner tensor values, got {len(positional_inner_tensors)}"
+            )
+
+        keyword_inner_tensors = dict(zip(cls.keyword_inner_tensor_names, remaining_iterator, strict=True))
+
+        return positional_inner_tensors, keyword_inner_tensors
+
     def _apply_fn_to_outer_tensor(
         self: Self,
         func: OpOverload | Callable[..., Any],
@@ -1326,22 +1364,17 @@ def _[WrapperType: MokitWrapperTensorBase](
         func,
         memory_format=memory_format,
     )
+    positional_inner_values, keyword_inner_values = cls._split_inner_tensor_values(cloned_inner_tensor_values)
 
     outer_tensor = self._clone_outer_tensor(memory_format=memory_format)
 
     initializer = cast(Callable[..., None], outer_tensor.__init__)
     initializer(
-        *cloned_inner_tensor_values[: len(cls.positional_inner_tensor_names)],
+        *positional_inner_values,
         *self.positional_metadata,
         outer_size=outer_tensor.size(),
         outer_stride=outer_tensor.stride(),
-        **dict(
-            zip(
-                cls.keyword_inner_tensor_names,
-                cloned_inner_tensor_values[len(cls.positional_inner_tensor_names) :],
-                strict=True,
-            )
-        ),
+        **keyword_inner_values,
         **dict(self.keyword_metadata),
     )
 
@@ -1460,20 +1493,15 @@ def _[WrapperType: MokitWrapperTensorBase](
         tuple(self.inner_tensors),
         func,
     )
+    positional_inner_values, keyword_inner_values = cls._split_inner_tensor_values(aliased_inner_values)
 
     initializer = cast(Callable[..., None], aliased.__init__)
     initializer(
-        *aliased_inner_values[: len(cls.positional_inner_tensor_names)],
+        *positional_inner_values,
         *self.positional_metadata,
         outer_size=aliased.size(),
         outer_stride=aliased.stride(),
-        **dict(
-            zip(
-                cls.keyword_inner_tensor_names,
-                aliased_inner_values[len(cls.positional_inner_tensor_names) :],
-                strict=True,
-            )
-        ),
+        **keyword_inner_values,
         **dict(self.keyword_metadata),
     )
 
@@ -1623,6 +1651,7 @@ def _[WrapperType: MokitWrapperTensorBase](
             memory_format=memory_format,
         ),
     )
+    positional_inner_values, keyword_inner_values = cls._split_inner_tensor_values(new_inner_tensor_values)
 
     target_device = self.device if device is None else device
     outer_tensor = cls._make_outer_tensor(
@@ -1637,17 +1666,11 @@ def _[WrapperType: MokitWrapperTensorBase](
 
     initializer = cast(Callable[..., None], outer_tensor.__init__)
     initializer(
-        *new_inner_tensor_values[: len(cls.positional_inner_tensor_names)],
+        *positional_inner_values,
         *self.positional_metadata,
         outer_size=outer_tensor.size(),
         outer_stride=outer_tensor.stride(),
-        **dict(
-            zip(
-                cls.keyword_inner_tensor_names,
-                new_inner_tensor_values[len(cls.positional_inner_tensor_names) :],
-                strict=True,
-            )
-        ),
+        **keyword_inner_values,
         **dict(self.keyword_metadata),
     )
 
