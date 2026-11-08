@@ -1347,9 +1347,8 @@ def _[WrapperType: MokitWrapperTensorBase](
         f"{func}: dispatch cls={cls.__name__} does not match type(self)={type(self).__name__}; types={types}"
     )
 
-    names = cls.inner_tensor_names()
     cloned_inner_tensor_values = apply_fn_by_id(
-        [getattr(self, name) for name in names],
+        tuple(self.inner_tensors),
         func,
         memory_format=memory_format,
     )
@@ -1431,9 +1430,9 @@ def _[WrapperType: MokitWrapperTensorBase](
     self.has_same_attributes(out, strict=True, raise_on_mismatch=True)
 
     apply_fn_by_id(
-        [getattr(self, name) for name in cls.inner_tensor_names()],
+        tuple(self.inner_tensors),
         lambda source, *, dest: func(source, memory_format=memory_format, out=dest),
-        dest=[getattr(out, name) for name in cls.inner_tensor_names()],
+        dest=tuple(out.inner_tensors),
     )
 
     return out
@@ -1483,9 +1482,8 @@ def _[WrapperType: MokitWrapperTensorBase](
 
     aliased = self._apply_fn_to_outer_tensor(func)
 
-    names = cls.inner_tensor_names()
     aliased_inner_values = apply_fn_by_id(
-        [getattr(self, name) for name in names],
+        tuple(self.inner_tensors),
         func,
     )
 
@@ -1553,9 +1551,9 @@ def _[WrapperType: MokitWrapperTensorBase](
     self.has_same_attributes(src, strict=True, raise_on_mismatch=True)
 
     apply_fn_by_id(
-        [getattr(src, name) for name in cls.inner_tensor_names()],
+        tuple(src.inner_tensors),
         lambda source, *, dest: func(dest, source, non_blocking=non_blocking),
-        dest=[getattr(self, name) for name in cls.inner_tensor_names()],
+        dest=tuple(self.inner_tensors),
     )
 
     return self
@@ -1641,9 +1639,8 @@ def _[WrapperType: MokitWrapperTensorBase](
             f"and memory_format; handle and remove {requested_conversions} before delegating"
         )
 
-    names = cls.inner_tensor_names()
     new_inner_tensor_values = apply_fn_by_id(
-        [getattr(self, name) for name in names],
+        tuple(self.inner_tensors),
         lambda src: func(
             src,
             device=device,

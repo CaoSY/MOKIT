@@ -5310,7 +5310,7 @@ def _rebuild_fresh[WrapperType: MokitWrapperTensorBase](
 ) -> WrapperType:
     """Rebuild a wrapper around the same fields and outer geometry."""
     return cls.__tensor_unflatten__(
-        {name: getattr(wrapper, name) for name in cls.inner_tensor_names()},
+        dict(zip(cls.inner_tensor_names(), wrapper.inner_tensors, strict=True)),
         dict(zip(cls.metadata_names(), wrapper.metadata, strict=True)),
         wrapper.size(),
         wrapper.stride(),
