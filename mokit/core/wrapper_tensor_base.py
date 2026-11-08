@@ -715,7 +715,8 @@ class MokitWrapperTensorBase(MokitTensorBase):
         """
         cls = type(self)
         tensor_names = cls.inner_tensor_names()
-        return tensor_names, self.metadata
+        metadata = dict(zip(cls.metadata_names(), self.metadata, strict=True))
+        return tensor_names, metadata
 
     @classmethod
     def __tensor_unflatten__(
@@ -1004,15 +1005,16 @@ class MokitWrapperTensorBase(MokitTensorBase):
         return (*cls.positional_metadata_names, *cls.keyword_metadata_names)
 
     @property
-    def metadata(self: Self) -> Mapping[str, Any]:
+    def metadata(self: Self) -> Iterator[Any]:
         """
-        Return the declared metadata values keyed by field name.
+        Return an iterator over the declared metadata values.
 
         Returns:
-            A new mapping containing the declared metadata values by reference.
+            An iterator over the declared metadata values in authoritative flatten
+            order, by reference.
 
         """
-        return {name: getattr(self, name) for name in type(self).metadata_names()}
+        return (getattr(self, name) for name in type(self).metadata_names())
 
     @property
     def positional_metadata(self: Self) -> Iterator[Any]:

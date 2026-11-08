@@ -3337,36 +3337,35 @@ def test_torch_function_forwards_related_types() -> None:
 
 
 def test_metadata_collects_positional_and_keyword_metadata() -> None:
-    """Test that metadata collects positional and keyword metadata in declared order."""
+    """Test that metadata yields positional and keyword metadata in declared order."""
     tag = ["tag"]
     note = {"note": 1}
     wrapper = _Wrapper(torch.zeros(2, 3), tag, note=note)
 
-    metadata = wrapper.metadata
+    metadata = tuple(wrapper.metadata)
 
-    assert metadata == {"tag": tag, "note": note}
-    assert list(metadata) == ["tag", "note"]
-    assert metadata["tag"] is tag
-    assert metadata["note"] is note
+    assert metadata == (tag, note)
+    assert metadata[0] is tag
+    assert metadata[1] is note
 
 
-def test_metadata_returns_new_mapping_each_access() -> None:
-    """Test that metadata returns a new mapping each access."""
+def test_metadata_returns_fresh_iterator() -> None:
+    """Test that metadata returns a fresh iterator each access."""
     tag = object()
     note = object()
     wrapper = _Wrapper(torch.zeros(2, 3), tag, note=note)
 
     metadata = wrapper.metadata
 
-    assert metadata == {"tag": tag, "note": note}
-    assert metadata["tag"] is tag
-    assert metadata["note"] is note
-    assert metadata is not wrapper.metadata
+    assert iter(metadata) is metadata
+    assert list(metadata) == [tag, note]
+    assert list(metadata) == []
+    assert tuple(wrapper.metadata) == (tag, note)
 
 
-def test_metadata_returns_empty_mapping_for_empty_wrapper() -> None:
+def test_metadata_returns_empty_iterator_for_empty_wrapper() -> None:
     """Test that metadata is empty for a wrapper with no metadata fields."""
-    assert _EmptyWrapper().metadata == {}
+    assert tuple(_EmptyWrapper().metadata) == ()
 
 
 # ------------------------------------------------------------------------------
@@ -5150,7 +5149,7 @@ def _rebuild_fresh[WrapperType: MokitWrapperTensorBase](
     """Rebuild a wrapper around the same fields and outer geometry."""
     return cls.__tensor_unflatten__(
         {name: getattr(wrapper, name) for name in cls.inner_tensor_names()},
-        wrapper.metadata,
+        dict(zip(cls.metadata_names(), wrapper.metadata, strict=True)),
         wrapper.size(),
         wrapper.stride(),
     )
