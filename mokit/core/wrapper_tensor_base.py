@@ -1004,12 +1004,12 @@ class MokitWrapperTensorBase(MokitTensorBase):
         return (*cls.positional_metadata_names, *cls.keyword_metadata_names)
 
     @property
-    def metadata(self: Self) -> dict[str, Any]:
+    def metadata(self: Self) -> Mapping[str, Any]:
         """
         Return the declared metadata values keyed by field name.
 
         Returns:
-            A new dict containing the declared metadata values by reference.
+            A new mapping containing the declared metadata values by reference.
 
         """
         return {name: getattr(self, name) for name in type(self).metadata_names()}
@@ -1026,12 +1026,12 @@ class MokitWrapperTensorBase(MokitTensorBase):
         return tuple(getattr(self, name) for name in type(self).positional_metadata_names)
 
     @property
-    def keyword_metadata(self: Self) -> dict[str, Any]:
+    def keyword_metadata(self: Self) -> Mapping[str, Any]:
         """
         Return keyword metadata values keyed by field name.
 
         Returns:
-            A new dict containing the keyword metadata values by reference.
+            A new mapping containing the keyword metadata values by reference.
 
         """
         return {name: getattr(self, name) for name in type(self).keyword_metadata_names}

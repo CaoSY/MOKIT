@@ -3350,20 +3350,21 @@ def test_metadata_collects_positional_and_keyword_metadata() -> None:
     assert metadata["note"] is note
 
 
-def test_metadata_returns_new_dict_each_access() -> None:
-    """Test that metadata returns a new dict whose mutation does not affect the wrapper."""
+def test_metadata_returns_new_mapping_each_access() -> None:
+    """Test that metadata returns a new mapping each access."""
     tag = object()
     note = object()
     wrapper = _Wrapper(torch.zeros(2, 3), tag, note=note)
 
     metadata = wrapper.metadata
-    metadata["tag"] = "changed"
 
-    assert wrapper.metadata == {"tag": tag, "note": note}
-    assert wrapper.metadata is not wrapper.metadata
+    assert metadata == {"tag": tag, "note": note}
+    assert metadata["tag"] is tag
+    assert metadata["note"] is note
+    assert metadata is not wrapper.metadata
 
 
-def test_metadata_returns_empty_dict_for_empty_wrapper() -> None:
+def test_metadata_returns_empty_mapping_for_empty_wrapper() -> None:
     """Test that metadata is empty for a wrapper with no metadata fields."""
     assert _EmptyWrapper().metadata == {}
 
@@ -3405,19 +3406,19 @@ def test_keyword_metadata_returns_keyword_values() -> None:
     assert keyword_metadata["note"] is note
 
 
-def test_keyword_metadata_returns_new_dict_each_access() -> None:
-    """Test that keyword_metadata returns a new dict whose mutation does not affect the wrapper."""
+def test_keyword_metadata_returns_new_mapping_each_access() -> None:
+    """Test that keyword_metadata returns a new mapping each access."""
     note = object()
     wrapper = _Wrapper(torch.zeros(2, 3), note=note)
 
     keyword_metadata = wrapper.keyword_metadata
-    keyword_metadata["note"] = "changed"
 
-    assert wrapper.keyword_metadata == {"note": note}
-    assert wrapper.keyword_metadata is not wrapper.keyword_metadata
+    assert keyword_metadata == {"note": note}
+    assert keyword_metadata["note"] is note
+    assert keyword_metadata is not wrapper.keyword_metadata
 
 
-def test_keyword_metadata_returns_empty_dict_for_empty_wrapper() -> None:
+def test_keyword_metadata_returns_empty_mapping_for_empty_wrapper() -> None:
     """Test that keyword_metadata is empty for a wrapper with no keyword metadata."""
     assert _EmptyWrapper().keyword_metadata == {}
 
