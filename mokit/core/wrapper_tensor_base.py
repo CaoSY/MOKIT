@@ -1627,15 +1627,15 @@ def _[WrapperType: MokitWrapperTensorBase](
         f"{func}: dispatch cls={cls.__name__} does not match type(self)={type(self).__name__}; types={types}"
     )
 
-    requested_conversions = tuple(
-        name
-        for name, value in (
-            ("dtype", dtype),
-            ("layout", layout),
+    if dtype is not None or layout is not None:
+        requested_conversions = tuple(
+            name
+            for name, value in (
+                ("dtype", dtype),
+                ("layout", layout),
+            )
+            if value is not None
         )
-        if value is not None
-    )
-    if requested_conversions:
         raise NotImplementedError(
             f"{func}: base handler supports only device, pin_memory, non_blocking, "
             f"and memory_format; handle and remove {requested_conversions} before delegating"
