@@ -3417,30 +3417,36 @@ def test_positional_inner_tensors_returns_empty_iterator_for_empty_wrapper() -> 
 
 
 def test_keyword_inner_tensors_returns_keyword_tensors() -> None:
-    """Test that keyword_inner_tensors maps keyword tensor names to the tensors."""
+    """Test that keyword_inner_tensors yields keyword tensor names and values by reference."""
+    bias = torch.tensor([3.0, 4.0])
+    wrapper = _Wrapper(torch.tensor([1.0, 2.0]), "hello", bias=bias, note="world")
+
+    keyword_inner_tensors = tuple(wrapper.keyword_inner_tensors)
+
+    assert len(keyword_inner_tensors) == 1
+    name, value = keyword_inner_tensors[0]
+    assert name == "bias"
+    assert value is bias
+
+
+def test_keyword_inner_tensors_returns_fresh_iterator() -> None:
+    """Test that keyword_inner_tensors returns a fresh iterator on each access."""
     bias = torch.tensor([3.0, 4.0])
     wrapper = _Wrapper(torch.tensor([1.0, 2.0]), "hello", bias=bias, note="world")
 
     keyword_inner_tensors = wrapper.keyword_inner_tensors
+    pairs = tuple(keyword_inner_tensors)
 
-    assert tuple(keyword_inner_tensors) == ("bias",)
-    assert keyword_inner_tensors["bias"] is bias
-
-
-def test_keyword_inner_tensors_returns_new_mapping_each_access() -> None:
-    """Test that keyword_inner_tensors returns a new mapping each access."""
-    bias = torch.tensor([3.0, 4.0])
-    wrapper = _Wrapper(torch.tensor([1.0, 2.0]), "hello", bias=bias, note="world")
-
-    keyword_inner_tensors = wrapper.keyword_inner_tensors
-
-    assert keyword_inner_tensors["bias"] is bias
-    assert keyword_inner_tensors is not wrapper.keyword_inner_tensors
+    assert iter(keyword_inner_tensors) is keyword_inner_tensors
+    assert len(pairs) == 1
+    assert pairs[0][1] is bias
+    assert tuple(keyword_inner_tensors) == ()
+    assert next(wrapper.keyword_inner_tensors)[1] is bias
 
 
-def test_keyword_inner_tensors_returns_empty_mapping_for_empty_wrapper() -> None:
+def test_keyword_inner_tensors_returns_empty_iterator_for_empty_wrapper() -> None:
     """Test that keyword_inner_tensors is empty for a wrapper with no keyword tensors."""
-    assert _EmptyWrapper().keyword_inner_tensors == {}
+    assert tuple(_EmptyWrapper().keyword_inner_tensors) == ()
 
 
 # ------------------------------------------------------------------------------
@@ -3520,31 +3526,36 @@ def test_positional_metadata_returns_empty_iterator_for_empty_wrapper() -> None:
 
 
 def test_keyword_metadata_returns_keyword_values() -> None:
-    """Test that keyword_metadata returns the keyword metadata values."""
+    """Test that keyword_metadata yields keyword metadata names and values by reference."""
     note = {"note": 1}
     wrapper = _Wrapper(torch.zeros(2, 3), note=note)
 
-    keyword_metadata = wrapper.keyword_metadata
+    keyword_metadata = tuple(wrapper.keyword_metadata)
 
-    assert keyword_metadata == {"note": note}
-    assert keyword_metadata["note"] is note
+    assert len(keyword_metadata) == 1
+    name, value = keyword_metadata[0]
+    assert name == "note"
+    assert value is note
 
 
-def test_keyword_metadata_returns_new_mapping_each_access() -> None:
-    """Test that keyword_metadata returns a new mapping each access."""
+def test_keyword_metadata_returns_fresh_iterator() -> None:
+    """Test that keyword_metadata returns a fresh iterator on each access."""
     note = object()
     wrapper = _Wrapper(torch.zeros(2, 3), note=note)
 
     keyword_metadata = wrapper.keyword_metadata
+    pairs = tuple(keyword_metadata)
 
-    assert keyword_metadata == {"note": note}
-    assert keyword_metadata["note"] is note
-    assert keyword_metadata is not wrapper.keyword_metadata
+    assert iter(keyword_metadata) is keyword_metadata
+    assert len(pairs) == 1
+    assert pairs[0][1] is note
+    assert tuple(keyword_metadata) == ()
+    assert next(wrapper.keyword_metadata)[1] is note
 
 
-def test_keyword_metadata_returns_empty_mapping_for_empty_wrapper() -> None:
+def test_keyword_metadata_returns_empty_iterator_for_empty_wrapper() -> None:
     """Test that keyword_metadata is empty for a wrapper with no keyword metadata."""
-    assert _EmptyWrapper().keyword_metadata == {}
+    assert tuple(_EmptyWrapper().keyword_metadata) == ()
 
 
 # ------------------------------------------------------------------------------

@@ -1031,15 +1031,15 @@ class MokitWrapperTensorBase(MokitTensorBase):
         return (getattr(self, name) for name in type(self).positional_inner_tensor_names)
 
     @property
-    def keyword_inner_tensors(self: Self) -> Mapping[str, torch.Tensor | CustomClassBase]:
+    def keyword_inner_tensors(self: Self) -> Iterator[tuple[str, torch.Tensor | CustomClassBase]]:
         """
-        Return keyword inner tensor values keyed by field name.
+        Return an iterator over keyword inner tensor field names and values.
 
         Returns:
-            A new mapping containing the keyword inner tensor values by reference.
+            An iterator over ``(name, value)`` pairs, with values by reference.
 
         """
-        return {name: getattr(self, name) for name in type(self).keyword_inner_tensor_names}
+        return ((name, getattr(self, name)) for name in type(self).keyword_inner_tensor_names)
 
     @property
     def metadata(self: Self) -> Iterator[Any]:
@@ -1065,15 +1065,15 @@ class MokitWrapperTensorBase(MokitTensorBase):
         return (getattr(self, name) for name in type(self).positional_metadata_names)
 
     @property
-    def keyword_metadata(self: Self) -> Mapping[str, Any]:
+    def keyword_metadata(self: Self) -> Iterator[tuple[str, Any]]:
         """
-        Return keyword metadata values keyed by field name.
+        Return an iterator over keyword metadata field names and values.
 
         Returns:
-            A new mapping containing the keyword metadata values by reference.
+            An iterator over ``(name, value)`` pairs, with values by reference.
 
         """
-        return {name: getattr(self, name) for name in type(self).keyword_metadata_names}
+        return ((name, getattr(self, name)) for name in type(self).keyword_metadata_names)
 
     def has_same_attributes(
         self: Self,
@@ -1368,7 +1368,7 @@ def _[WrapperType: MokitWrapperTensorBase](
                 strict=True,
             )
         ),
-        **self.keyword_metadata,
+        **dict(self.keyword_metadata),
     )
 
     return outer_tensor
@@ -1500,7 +1500,7 @@ def _[WrapperType: MokitWrapperTensorBase](
                 strict=True,
             )
         ),
-        **self.keyword_metadata,
+        **dict(self.keyword_metadata),
     )
 
     return aliased
@@ -1674,7 +1674,7 @@ def _[WrapperType: MokitWrapperTensorBase](
                 strict=True,
             )
         ),
-        **self.keyword_metadata,
+        **dict(self.keyword_metadata),
     )
 
     return outer_tensor
