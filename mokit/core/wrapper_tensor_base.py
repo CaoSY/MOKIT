@@ -746,12 +746,12 @@ class MokitWrapperTensorBase(MokitTensorBase):
         positional_metadata_count = len(cls.positional_metadata_names)
 
         inner_tensor_values = (inner_tensors[name] for name in cls.positional_inner_tensor_names)
-        metadata_values = (metadata[index] for index in range(positional_metadata_count))
+        metadata_values = itertools.islice(metadata, positional_metadata_count)
         keyword_inner_tensor_values = {name: inner_tensors[name] for name in cls.keyword_inner_tensor_names}
         keyword_metadata_values = dict(
             zip(
                 cls.keyword_metadata_names,
-                metadata[positional_metadata_count:],
+                itertools.islice(metadata, positional_metadata_count, None),
                 strict=True,
             )
         )
