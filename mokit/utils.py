@@ -148,7 +148,10 @@ def apply_fn[SourceType, DestType, ResultType](
 
     When ``dest`` is ``None``, the callable is invoked without a destination argument.
     Otherwise, source and destination values are paired by iteration order and the
-    callable is invoked with the destination as its ``dest`` keyword argument.
+    callable receives the destination as its ``dest`` keyword argument. This supports
+    in-place-style callables, but no in-place behavior is required or enforced: the
+    callable may modify ``dest`` and return it, return another value, or return ``None``.
+    The returned list contains exactly the callable's return values.
 
     Args:
         src: The source values passed as the callable's first argument.
@@ -158,7 +161,8 @@ def apply_fn[SourceType, DestType, ResultType](
         **kwargs: Keyword arguments forwarded to the callable.
 
     Returns:
-        The callable results in source iteration order.
+        The results returned by the callable, in source iteration order. When ``dest`` is
+        provided, these are not necessarily the destination values.
 
     Raises:
         ValueError: If ``dest`` and ``src`` have different lengths.
@@ -186,7 +190,9 @@ def apply_fn_by_id[SrcType, SrcIDType: Hashable, DestType, DestIDType: Hashable,
     Values sharing the same ``src_idfunc`` identity share one result. If ``dest`` is
     provided, ``dest_idfunc`` defines destination identities, and its group topology must
     match the source grouping. The callable receives one representative destination per
-    group.
+    group. Like ``apply_fn``, ``dest`` is forwarded as a keyword argument and the callable
+    is not required to return it; the returned list contains the values returned by the
+    callable.
 
     Args:
         src: Source values.

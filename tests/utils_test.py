@@ -44,6 +44,36 @@ def test_apply_fn_pairs_destinations_and_forwards_dest_keyword() -> None:
     assert results == ["a20", "b40"]
 
 
+def test_apply_fn_allows_in_place_callables_returning_none() -> None:
+    """Test that apply_fn accepts a destination callable whose result is None."""
+    destinations: list[dict[str, int]] = [{"value": 0}, {"value": 0}]
+
+    def assign(source: int, *, dest: dict[str, int]) -> None:
+        """Assign the source value to the destination."""
+        dest["value"] = source
+
+    results = apply_fn([1, 2], assign, dest=destinations)
+
+    assert results == [None, None]
+    assert [destination["value"] for destination in destinations] == [1, 2]
+
+
+def test_apply_fn_returns_callable_results_not_destinations() -> None:
+    """Test that apply_fn returns callable values rather than destination objects."""
+    destinations: list[dict[str, int]] = [{"value": 0}, {"value": 0}]
+
+    def assign_and_return_source(source: int, *, dest: dict[str, int]) -> int:
+        """Assign the source value and return the source."""
+        dest["value"] = source
+        return source
+
+    results = apply_fn([1, 2], assign_and_return_source, dest=destinations)
+
+    assert results == [1, 2]
+    assert results[0] is not destinations[0]
+    assert [destination["value"] for destination in destinations] == [1, 2]
+
+
 def test_apply_fn_returns_empty_list_for_empty_sources() -> None:
     """Test that apply_fn returns an empty list for empty sources."""
 
