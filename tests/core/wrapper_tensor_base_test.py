@@ -3332,6 +3332,118 @@ def test_torch_function_forwards_related_types() -> None:
 
 
 # ------------------------------------------------------------------------------
+# inner_tensors
+# ------------------------------------------------------------------------------
+
+
+def test_inner_tensors_collects_positional_and_keyword_tensors() -> None:
+    """Test that inner_tensors yields positional then keyword tensors by reference."""
+    payload = torch.tensor([1.0, 2.0])
+    bias = torch.tensor([3.0, 4.0])
+    wrapper = _Wrapper(payload, "hello", bias=bias, note="world")
+
+    inner_tensors = tuple(wrapper.inner_tensors)
+
+    assert len(inner_tensors) == 2
+    assert inner_tensors[0] is payload
+    assert inner_tensors[1] is bias
+
+
+def test_inner_tensors_returns_fresh_iterator() -> None:
+    """Test that inner_tensors returns a fresh iterator each access."""
+    payload = torch.tensor([1.0, 2.0])
+    bias = torch.tensor([3.0, 4.0])
+    wrapper = _Wrapper(payload, "hello", bias=bias, note="world")
+
+    inner_tensors = wrapper.inner_tensors
+    values = tuple(inner_tensors)
+
+    assert iter(inner_tensors) is inner_tensors
+    assert len(values) == 2
+    assert values[0] is payload
+    assert values[1] is bias
+    assert tuple(inner_tensors) == ()
+    assert next(wrapper.inner_tensors) is payload
+
+
+def test_inner_tensors_returns_empty_iterator_for_empty_wrapper() -> None:
+    """Test that inner_tensors is empty for a wrapper with no inner tensors."""
+    assert tuple(_EmptyWrapper().inner_tensors) == ()
+
+
+# ------------------------------------------------------------------------------
+# positional_inner_tensors
+# ------------------------------------------------------------------------------
+
+
+def test_positional_inner_tensors_returns_positional_tensors() -> None:
+    """Test that positional_inner_tensors yields the positional tensors by reference."""
+    left = torch.tensor([1.0, 2.0])
+    right = torch.tensor([3.0, 4.0])
+    wrapper = _AliasWrapper(left, right)
+
+    positional_inner_tensors = tuple(wrapper.positional_inner_tensors)
+
+    assert len(positional_inner_tensors) == 2
+    assert positional_inner_tensors[0] is left
+    assert positional_inner_tensors[1] is right
+
+
+def test_positional_inner_tensors_returns_fresh_iterator() -> None:
+    """Test that positional_inner_tensors returns a fresh iterator on each access."""
+    left = torch.tensor([1.0, 2.0])
+    right = torch.tensor([3.0, 4.0])
+    wrapper = _AliasWrapper(left, right)
+
+    positional_inner_tensors = wrapper.positional_inner_tensors
+    values = tuple(positional_inner_tensors)
+
+    assert iter(positional_inner_tensors) is positional_inner_tensors
+    assert len(values) == 2
+    assert values[0] is left
+    assert values[1] is right
+    assert tuple(positional_inner_tensors) == ()
+    assert next(wrapper.positional_inner_tensors) is left
+
+
+def test_positional_inner_tensors_returns_empty_iterator_for_empty_wrapper() -> None:
+    """Test that positional_inner_tensors is empty for a wrapper with no positional tensors."""
+    assert tuple(_EmptyWrapper().positional_inner_tensors) == ()
+
+
+# ------------------------------------------------------------------------------
+# keyword_inner_tensors
+# ------------------------------------------------------------------------------
+
+
+def test_keyword_inner_tensors_returns_keyword_tensors() -> None:
+    """Test that keyword_inner_tensors maps keyword tensor names to the tensors."""
+    bias = torch.tensor([3.0, 4.0])
+    wrapper = _Wrapper(torch.tensor([1.0, 2.0]), "hello", bias=bias, note="world")
+
+    keyword_inner_tensors = wrapper.keyword_inner_tensors
+
+    assert tuple(keyword_inner_tensors) == ("bias",)
+    assert keyword_inner_tensors["bias"] is bias
+
+
+def test_keyword_inner_tensors_returns_new_mapping_each_access() -> None:
+    """Test that keyword_inner_tensors returns a new mapping each access."""
+    bias = torch.tensor([3.0, 4.0])
+    wrapper = _Wrapper(torch.tensor([1.0, 2.0]), "hello", bias=bias, note="world")
+
+    keyword_inner_tensors = wrapper.keyword_inner_tensors
+
+    assert keyword_inner_tensors["bias"] is bias
+    assert keyword_inner_tensors is not wrapper.keyword_inner_tensors
+
+
+def test_keyword_inner_tensors_returns_empty_mapping_for_empty_wrapper() -> None:
+    """Test that keyword_inner_tensors is empty for a wrapper with no keyword tensors."""
+    assert _EmptyWrapper().keyword_inner_tensors == {}
+
+
+# ------------------------------------------------------------------------------
 # metadata
 # ------------------------------------------------------------------------------
 

@@ -351,7 +351,8 @@ class MokitWrapperTensorBase(MokitTensorBase):
     name tuples below exist by default and are empty; an empty tuple means there are no
     fields of that kind. When overridden, each must be a tuple of strings, no name may
     appear more than once across the four tuples, and none may use the reserved names
-    ``outer_size``, ``outer_stride``, ``metadata``, ``positional_metadata``,
+    ``outer_size``, ``outer_stride``, ``inner_tensors``, ``positional_inner_tensors``,
+    ``keyword_inner_tensors``, ``metadata``, ``positional_metadata``,
     ``keyword_metadata``, ``inner_tensor_names``, or ``metadata_names``.
 
     Every name listed in any of the four attributes declares a field that must exist on the
@@ -545,6 +546,9 @@ class MokitWrapperTensorBase(MokitTensorBase):
     _RESERVED_FIELD_NAMES: ClassVar[tuple[str, ...]] = (
         "outer_size",
         "outer_stride",
+        "inner_tensors",
+        "positional_inner_tensors",
+        "keyword_inner_tensors",
         "metadata",
         "positional_metadata",
         "keyword_metadata",
@@ -1002,6 +1006,40 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         """
         return itertools.chain(cls.positional_metadata_names, cls.keyword_metadata_names)
+
+    @property
+    def inner_tensors(self: Self) -> Iterator[torch.Tensor | CustomClassBase]:
+        """
+        Return an iterator over the declared inner tensor values.
+
+        Returns:
+            An iterator over the declared inner tensor values in authoritative flatten
+            order, by reference.
+
+        """
+        return (getattr(self, name) for name in type(self).inner_tensor_names())
+
+    @property
+    def positional_inner_tensors(self: Self) -> Iterator[torch.Tensor | CustomClassBase]:
+        """
+        Return an iterator over positional inner tensor values in declaration order.
+
+        Returns:
+            An iterator over the positional inner tensor values by reference.
+
+        """
+        return (getattr(self, name) for name in type(self).positional_inner_tensor_names)
+
+    @property
+    def keyword_inner_tensors(self: Self) -> Mapping[str, torch.Tensor | CustomClassBase]:
+        """
+        Return keyword inner tensor values keyed by field name.
+
+        Returns:
+            A new mapping containing the keyword inner tensor values by reference.
+
+        """
+        return {name: getattr(self, name) for name in type(self).keyword_inner_tensor_names}
 
     @property
     def metadata(self: Self) -> Iterator[Any]:
