@@ -231,7 +231,7 @@ def test_tensor_unflatten_uses_default_new() -> None:
 
     wrapper = _DefaultNewWrapper.__tensor_unflatten__(
         {"payload": inner},
-        {"tag": "tag"},
+        ("tag",),
         (4,),
         (1,),
     )
@@ -601,11 +601,11 @@ def test_repr_empty_wrapper() -> None:
 
 
 def test_tensor_flatten_returns_inner_names_and_metadata() -> None:
-    """Test that flatten returns inner tensor names and metadata."""
+    """Test that flatten returns inner tensor names and metadata values in declared order."""
     wrapper = _Wrapper(torch.tensor([1.0, 2.0]), "hello", bias=torch.tensor([3.0, 4.0]), note="world")
     tensor_names, metadata = wrapper.__tensor_flatten__()
     assert tuple(tensor_names) == ("payload", "bias")
-    assert metadata == {"tag": "hello", "note": "world"}
+    assert metadata == ("hello", "world")
 
 
 def test_tensor_flatten_empty_wrapper() -> None:
@@ -613,7 +613,7 @@ def test_tensor_flatten_empty_wrapper() -> None:
     wrapper = _EmptyWrapper()
     tensor_names, metadata = wrapper.__tensor_flatten__()
     assert tuple(tensor_names) == ()
-    assert metadata == {}
+    assert metadata == ()
 
 
 # ------------------------------------------------------------------------------
@@ -627,7 +627,7 @@ def test_tensor_unflatten_reconstructs_all_field_kinds() -> None:
     bias = torch.tensor([3.0, 4.0])
     rebuilt = _Wrapper.__tensor_unflatten__(
         {"bias": bias, "payload": payload},
-        {"note": "world", "tag": "hello"},
+        ("hello", "world"),
         (2,),
         (1,),
     )
@@ -642,7 +642,7 @@ def test_tensor_unflatten_reconstructs_all_field_kinds() -> None:
 
 def test_tensor_unflatten_forwards_outer_geometry() -> None:
     """Test that unflatten passes outer_size and outer_stride to the constructor."""
-    rebuilt = _EmptyWrapper.__tensor_unflatten__({}, {}, (4,), (2,))
+    rebuilt = _EmptyWrapper.__tensor_unflatten__({}, (), (4,), (2,))
     assert isinstance(rebuilt, _EmptyWrapper)
     assert rebuilt.size() == torch.Size([4])
     assert rebuilt.stride() == (2,)
@@ -650,7 +650,7 @@ def test_tensor_unflatten_forwards_outer_geometry() -> None:
 
 def test_tensor_unflatten_empty_wrapper() -> None:
     """Test that unflatten rebuilds a fieldless wrapper."""
-    rebuilt = _EmptyWrapper.__tensor_unflatten__({}, {}, (0,), (1,))
+    rebuilt = _EmptyWrapper.__tensor_unflatten__({}, (), (0,), (1,))
     assert isinstance(rebuilt, _EmptyWrapper)
     assert rebuilt.size() == torch.Size([0])
     assert rebuilt.stride() == (1,)
@@ -3836,7 +3836,7 @@ def test_constructor_field_groups_collects_all_field_kinds() -> None:
 
     groups = _Wrapper._constructor_field_groups(
         {"bias": bias, "payload": payload},
-        {"note": note, "tag": tag},
+        (tag, note),
     )
     positional_inner_tensors, positional_metadata, keyword_inner_tensors, keyword_metadata = groups
 
@@ -3853,7 +3853,7 @@ def test_constructor_field_groups_uses_declared_field_order() -> None:
     left = torch.tensor([1.0, 2.0])
     right = torch.tensor([3.0, 4.0])
 
-    groups = _AliasWrapper._constructor_field_groups({"right": right, "left": left}, {})
+    groups = _AliasWrapper._constructor_field_groups({"right": right, "left": left}, ())
     positional_inner_tensors, positional_metadata, keyword_inner_tensors, keyword_metadata = groups
 
     assert tuple(positional_inner_tensors) == (left, right)
@@ -3865,7 +3865,7 @@ def test_constructor_field_groups_uses_declared_field_order() -> None:
 def test_constructor_field_groups_handles_empty_wrapper() -> None:
     """Test that _constructor_field_groups returns empty groups for a fieldless wrapper."""
     positional_inner_tensors, positional_metadata, keyword_inner_tensors, keyword_metadata = (
-        _EmptyWrapper._constructor_field_groups({}, {})
+        _EmptyWrapper._constructor_field_groups({}, ())
     )
 
     assert tuple(positional_inner_tensors) == ()
@@ -5322,7 +5322,7 @@ def _rebuild_fresh[WrapperType: MokitWrapperTensorBase](
     """Rebuild a wrapper around the same fields and outer geometry."""
     return cls.__tensor_unflatten__(
         dict(zip(cls.inner_tensor_names(), wrapper.inner_tensors, strict=True)),
-        dict(zip(cls.metadata_names(), wrapper.metadata, strict=True)),
+        tuple(wrapper.metadata),
         wrapper.size(),
         wrapper.stride(),
     )

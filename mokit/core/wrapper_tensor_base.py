@@ -710,24 +710,23 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         return f"{type(self).__name__}({', '.join(fields)})"
 
-    def __tensor_flatten__(self) -> tuple[Sequence[str], Mapping[str, Any]]:
+    def __tensor_flatten__(self) -> tuple[Sequence[str], tuple[Any, ...]]:
         """
         Flatten the wrapper into inner tensor names and metadata.
 
         Returns:
-            The names of the inner tensors and the metadata mapping.
+            The inner tensor names in ``inner_tensor_names`` order and the metadata
+            values in ``metadata_names`` order.
 
         """
         cls = type(self)
-        tensor_names = tuple(cls.inner_tensor_names())
-        metadata = dict(zip(cls.metadata_names(), self.metadata, strict=True))
-        return tensor_names, metadata
+        return tuple(cls.inner_tensor_names()), tuple(self.metadata)
 
     @classmethod
     def __tensor_unflatten__(
         cls,
         inner_tensors: Mapping[str, torch.Tensor | CustomClassBase],
-        metadata: Mapping[str, Any],
+        metadata: Sequence[Any],
         outer_size: Sequence[int | torch.SymInt],
         outer_stride: Sequence[int | torch.SymInt],
     ) -> Self:
@@ -736,7 +735,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         Args:
             inner_tensors: The inner tensors, keyed by their flattened names.
-            metadata: The metadata mapping returned by ``__tensor_flatten__``.
+            metadata: The metadata values returned by ``__tensor_flatten__``.
             outer_size: The requested outer size.
             outer_stride: The requested outer stride.
 
@@ -1204,7 +1203,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
     def _constructor_field_groups(
         cls,
         inner_tensors: Mapping[str, torch.Tensor | CustomClassBase],
-        metadata: Mapping[str, Any],
+        metadata: Sequence[Any],
     ) -> tuple[
         Iterator[torch.Tensor | CustomClassBase],
         Iterator[Any],
@@ -1216,7 +1215,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         Args:
             inner_tensors: The inner tensors keyed by their flattened names.
-            metadata: The metadata mapping from ``__tensor_flatten__``.
+            metadata: The metadata values from ``__tensor_flatten__``.
 
         Returns:
             Iterators over positional inner tensors and positional metadata, followed by
@@ -1224,11 +1223,19 @@ class MokitWrapperTensorBase(MokitTensorBase):
             constructor-protocol order.
 
         """
+        positional_metadata_count = len(cls.positional_metadata_names)
+
         return (
             (inner_tensors[name] for name in cls.positional_inner_tensor_names),
-            (metadata[name] for name in cls.positional_metadata_names),
+            (metadata[index] for index in range(positional_metadata_count)),
             {name: inner_tensors[name] for name in cls.keyword_inner_tensor_names},
-            {name: metadata[name] for name in cls.keyword_metadata_names},
+            dict(
+                zip(
+                    cls.keyword_metadata_names,
+                    metadata[positional_metadata_count:],
+                    strict=True,
+                )
+            ),
         )
 
     def _apply_fn_to_outer_tensor(
