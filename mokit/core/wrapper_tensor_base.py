@@ -4,6 +4,7 @@
 """Wrapper tensor base class and its dispatch helpers."""
 
 import functools
+import itertools
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Any, ClassVar, Literal, Protocol, Self, cast, overload
@@ -990,19 +991,19 @@ class MokitWrapperTensorBase(MokitTensorBase):
         return (*cls.positional_inner_tensor_names, *cls.keyword_inner_tensor_names)
 
     @classmethod
-    def metadata_names(cls: type[Self]) -> tuple[str, ...]:
+    def metadata_names(cls: type[Self]) -> Iterator[str]:
         """
-        Return the metadata field names in authoritative flatten order.
+        Return an iterator over the metadata field names in authoritative flatten order.
 
         The order is ``positional_metadata_names`` followed by
         ``keyword_metadata_names``. Flattening and constructor argument assembly use this
-        order.
+        order. The class attributes are read when this method is called.
 
         Returns:
-            The flattened metadata field names.
+            An iterator over the flattened metadata field names.
 
         """
-        return (*cls.positional_metadata_names, *cls.keyword_metadata_names)
+        return itertools.chain(cls.positional_metadata_names, cls.keyword_metadata_names)
 
     @property
     def metadata(self: Self) -> Iterator[Any]:

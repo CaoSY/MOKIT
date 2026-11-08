@@ -3458,12 +3458,37 @@ def test_inner_tensor_names_returns_empty_tuple_for_empty_wrapper() -> None:
 
 def test_metadata_names_concatenates_positional_and_keyword_names() -> None:
     """Test that metadata_names uses positional-then-keyword declaration order."""
-    assert _Wrapper.metadata_names() == ("tag", "note")
+    assert tuple(_Wrapper.metadata_names()) == ("tag", "note")
 
 
-def test_metadata_names_returns_empty_tuple_for_empty_wrapper() -> None:
+def test_metadata_names_returns_fresh_iterator() -> None:
+    """Test that metadata_names returns a fresh iterator on each access."""
+    names = _Wrapper.metadata_names()
+
+    assert iter(names) is names
+    assert tuple(names) == ("tag", "note")
+    assert tuple(names) == ()
+    assert tuple(_Wrapper.metadata_names()) == ("tag", "note")
+
+
+def test_metadata_names_reflects_class_attribute_updates() -> None:
+    """Test that metadata_names reads the current class attributes."""
+
+    class _DynamicMetadataWrapper(_EmptyWrapper):
+        """A wrapper whose name tuples are updated after creation."""
+
+        positional_metadata_names = ("tag",)
+
+    assert tuple(_DynamicMetadataWrapper.metadata_names()) == ("tag",)
+
+    _DynamicMetadataWrapper.keyword_metadata_names = ("note",)
+
+    assert tuple(_DynamicMetadataWrapper.metadata_names()) == ("tag", "note")
+
+
+def test_metadata_names_returns_empty_iterator_for_empty_wrapper() -> None:
     """Test that metadata_names is empty for a wrapper with no metadata fields."""
-    assert _EmptyWrapper.metadata_names() == ()
+    assert tuple(_EmptyWrapper.metadata_names()) == ()
 
 
 # ------------------------------------------------------------------------------
