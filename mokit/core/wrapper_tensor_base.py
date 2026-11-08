@@ -980,10 +980,8 @@ class MokitWrapperTensorBase(MokitTensorBase):
         """
         Return an iterator over the inner tensor field names in authoritative flatten order.
 
-        The order is ``positional_inner_tensor_names`` followed by
-        ``keyword_inner_tensor_names``. Flattening, field aliasing checks, and constructor
-        argument assembly use this order. The class attributes are read when this method
-        is called.
+        The order is ``positional_inner_tensor_names`` followed by ``keyword_inner_tensor_names``.
+        The class attributes are read when this method is called.
 
         Returns:
             An iterator over the flattened inner tensor field names.
@@ -996,9 +994,8 @@ class MokitWrapperTensorBase(MokitTensorBase):
         """
         Return an iterator over the metadata field names in authoritative flatten order.
 
-        The order is ``positional_metadata_names`` followed by
-        ``keyword_metadata_names``. Flattening and constructor argument assembly use this
-        order. The class attributes are read when this method is called.
+        The order is ``positional_metadata_names`` followed by ``keyword_metadata_names``.
+        The class attributes are read when this method is called.
 
         Returns:
             An iterator over the flattened metadata field names.
