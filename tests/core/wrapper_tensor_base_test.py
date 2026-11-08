@@ -3637,90 +3637,6 @@ def test_apply_fn_to_outer_tensor_forwards_arguments() -> None:
 
 
 # ------------------------------------------------------------------------------
-# tensor_field_aliasing_groups
-# ------------------------------------------------------------------------------
-
-
-def test_tensor_field_aliasing_groups_groups_shared_tensors() -> None:
-    """Test that shared inner tensors are grouped by object identity."""
-    shared = torch.arange(4, dtype=torch.float32)
-    wrapper = _Wrapper(shared, bias=shared)
-
-    assert wrapper.tensor_field_aliasing_groups() == (("payload", "bias"),)
-
-
-def test_tensor_field_aliasing_groups_orders_distinct_groups_by_first_occurrence() -> None:
-    """Test that distinct inner tensors form groups in field order."""
-    payload = torch.arange(4, dtype=torch.float32)
-    bias = torch.ones(4, dtype=torch.float32)
-    wrapper = _Wrapper(payload, bias=bias)
-
-    assert wrapper.tensor_field_aliasing_groups() == (("payload",), ("bias",))
-
-
-def test_tensor_field_aliasing_groups_handles_empty_wrapper() -> None:
-    """Test that an empty wrapper has no aliasing groups."""
-    assert _EmptyWrapper().tensor_field_aliasing_groups() == ()
-
-
-# ------------------------------------------------------------------------------
-# has_same_tensor_field_aliasing
-# ------------------------------------------------------------------------------
-
-
-def test_has_same_tensor_field_aliasing_accepts_matching_groups() -> None:
-    """Test that matching group structures are accepted."""
-    source = _AliasWrapper(
-        torch.arange(4, dtype=torch.float32),
-        torch.arange(4, dtype=torch.float32),
-    )
-    target = _AliasWrapper(
-        torch.ones(4, dtype=torch.float32),
-        torch.ones(4, dtype=torch.float32),
-    )
-
-    assert target.has_same_tensor_field_aliasing(source.tensor_field_aliasing_groups())
-
-
-def test_has_same_tensor_field_aliasing_accepts_matching_shared_groups() -> None:
-    """Test that matching shared-tensor groups are accepted."""
-    source_shared = torch.arange(4, dtype=torch.float32)
-    target_shared = torch.ones(4, dtype=torch.float32)
-    source = _AliasWrapper(source_shared, source_shared)
-    target = _AliasWrapper(target_shared, target_shared)
-
-    assert target.has_same_tensor_field_aliasing(source.tensor_field_aliasing_groups())
-
-
-def test_has_same_tensor_field_aliasing_rejects_mismatch_without_raising() -> None:
-    """Test that a mismatch returns False when errors are disabled."""
-    shared = torch.arange(4, dtype=torch.float32)
-    source = _AliasWrapper(shared, shared)
-    target = _AliasWrapper(
-        torch.arange(4, dtype=torch.float32),
-        torch.ones(4, dtype=torch.float32),
-    )
-
-    assert not target.has_same_tensor_field_aliasing(source.tensor_field_aliasing_groups())
-
-
-def test_has_same_tensor_field_aliasing_raises_on_mismatch() -> None:
-    """Test that a mismatch raises with both alias groups."""
-    shared = torch.arange(4, dtype=torch.float32)
-    source = _AliasWrapper(shared, shared)
-    target = _AliasWrapper(
-        torch.arange(4, dtype=torch.float32),
-        torch.ones(4, dtype=torch.float32),
-    )
-
-    with pytest.raises(ValueError, match="field aliasing differs"):
-        target.has_same_tensor_field_aliasing(
-            source.tensor_field_aliasing_groups(),
-            raise_on_mismatch=True,
-        )
-
-
-# ------------------------------------------------------------------------------
 # _constructor_field_groups
 # ------------------------------------------------------------------------------
 
@@ -4357,7 +4273,7 @@ def test_clone_out_rejects_alias_topology_mismatch() -> None:
     source = _AliasWrapper(shared, shared)
     out = _AliasWrapper(torch.zeros(2, 3), torch.zeros(2, 3))
 
-    with pytest.raises(ValueError, match="field aliasing differs"):
+    with pytest.raises(ValueError, match="grouping differ"):
         torch.ops.aten.clone.out(source, out=out)
 
 
@@ -4370,7 +4286,7 @@ def test_clone_out_rejects_nested_alias_topology_mismatch() -> None:
         _Wrapper(torch.zeros(4, dtype=torch.float32)),
     )
 
-    with pytest.raises(ValueError, match="field aliasing differs"):
+    with pytest.raises(ValueError, match="grouping differ"):
         torch.ops.aten.clone.out(source, out=out)
 
 
@@ -4872,7 +4788,7 @@ def test_copy_rejects_alias_group_mismatch() -> None:
     source = _AliasWrapper(shared, shared)
     destination = _AliasWrapper(torch.zeros(2, 3), torch.zeros(2, 3))
 
-    with pytest.raises(ValueError, match="field aliasing differs"):
+    with pytest.raises(ValueError, match="grouping differ"):
         torch.ops.aten.copy_.default(destination, source)
 
 

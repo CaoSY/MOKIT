@@ -14,7 +14,7 @@ from torch._ops import OpOverload
 from torch.utils._python_dispatch import return_and_correct_aliasing
 
 from mokit.core import MokitTensorBase
-from mokit.utils import apply_fn
+from mokit.utils import apply_fn_by_id
 
 
 class HandlerProtocol[
@@ -1108,60 +1108,6 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         return True
 
-    def tensor_field_aliasing_groups(self) -> tuple[tuple[str, ...], ...]:
-        """
-        Group inner tensor field names by exact object identity.
-
-        Returns:
-            Field-name groups ordered by first occurrence. Names within each group follow
-            the authoritative flattened field order.
-
-        """
-        groups: dict[int, list[str]] = {}
-
-        for name in type(self).inner_tensor_names():
-            # Python guarantees dict insertion order:
-            # https://docs.python.org/3/library/stdtypes.html#typesmapping
-            # so groups are ordered by the first field that references each tensor object.
-            groups.setdefault(id(getattr(self, name)), []).append(name)
-
-        return tuple(tuple(names) for names in groups.values())
-
-    def has_same_tensor_field_aliasing(
-        self: Self,
-        field_aliasing_group: tuple[tuple[str, ...], ...],
-        *,
-        raise_on_mismatch: bool = False,
-    ) -> bool:
-        """
-        Compare exact-object aliasing against the given field aliasing groups.
-
-        Field names are grouped by the identity of the tensor they reference. The groups
-        match only when corresponding fields produce identical first-occurrence groups.
-        Storage-level view aliasing is not examined.
-
-        Args:
-            field_aliasing_group: The field aliasing groups to compare against.
-            raise_on_mismatch: Whether to raise at the first mismatch instead of returning
-                False.
-
-        Returns:
-            Whether this wrapper groups its inner tensor fields identically.
-
-        Raises:
-            ValueError: If ``raise_on_mismatch`` is true and a field group differs.
-
-        """
-        self_group = self.tensor_field_aliasing_groups()
-
-        if self_group == field_aliasing_group:
-            return True
-
-        if not raise_on_mismatch:
-            return False
-
-        raise ValueError(f"field aliasing differs: self={self_group!r}, given={field_aliasing_group!r}")
-
     def outer_stride(
         self: Self,
         *,
@@ -1361,27 +1307,28 @@ def _[WrapperType: MokitWrapperTensorBase](
         f"{func}: dispatch cls={cls.__name__} does not match type(self)={type(self).__name__}; types={types}"
     )
 
-    groups = self.tensor_field_aliasing_groups()
-    cloned_inner_tensor_values = apply_fn(
-        [getattr(self, group[0]) for group in groups],
+    names = cls.inner_tensor_names()
+    cloned_inner_tensor_values = apply_fn_by_id(
+        [getattr(self, name) for name in names],
         func,
         memory_format=memory_format,
     )
-
-    cloned_inner_tensors: dict[str, torch.Tensor] = {}
-    for group, cloned in zip(groups, cloned_inner_tensor_values, strict=True):
-        for name in group:
-            cloned_inner_tensors[name] = cloned
 
     outer_tensor = self._clone_outer_tensor(memory_format=memory_format)
 
     initializer = cast(Callable[..., None], outer_tensor.__init__)
     initializer(
-        *(cloned_inner_tensors[name] for name in cls.positional_inner_tensor_names),
+        *cloned_inner_tensor_values[: len(cls.positional_inner_tensor_names)],
         *self.positional_metadata,
         outer_size=outer_tensor.size(),
         outer_stride=outer_tensor.stride(),
-        **{name: cloned_inner_tensors[name] for name in cls.keyword_inner_tensor_names},
+        **dict(
+            zip(
+                cls.keyword_inner_tensor_names,
+                cloned_inner_tensor_values[len(cls.positional_inner_tensor_names) :],
+                strict=True,
+            )
+        ),
         **self.keyword_metadata,
     )
 
@@ -1443,16 +1390,11 @@ def _[WrapperType: MokitWrapperTensorBase](
 
     self.has_same_attributes(out, strict=True, raise_on_mismatch=True)
 
-    field_aliasing_group = self.tensor_field_aliasing_groups()
-    out.has_same_tensor_field_aliasing(
-        field_aliasing_group,
-        raise_on_mismatch=True,
-    )
-
-    apply_fn(
-        [getattr(self, group[0]) for group in field_aliasing_group],
+    names = cls.inner_tensor_names()
+    apply_fn_by_id(
+        [getattr(self, name) for name in names],
         lambda source, *, dest: func(source, memory_format=memory_format, out=dest),
-        dest=[getattr(out, group[0]) for group in field_aliasing_group],
+        dest=[getattr(out, name) for name in names],
     )
 
     return out
@@ -1502,24 +1444,25 @@ def _[WrapperType: MokitWrapperTensorBase](
 
     aliased = self._apply_fn_to_outer_tensor(func)
 
-    groups = self.tensor_field_aliasing_groups()
-    aliased_inner_values = apply_fn(
-        [getattr(self, group[0]) for group in groups],
+    names = cls.inner_tensor_names()
+    aliased_inner_values = apply_fn_by_id(
+        [getattr(self, name) for name in names],
         func,
     )
 
-    aliased_inner_tensors: dict[str, torch.Tensor] = {}
-    for group, aliased_value in zip(groups, aliased_inner_values, strict=True):
-        for name in group:
-            aliased_inner_tensors[name] = aliased_value
-
     initializer = cast(Callable[..., None], aliased.__init__)
     initializer(
-        *(aliased_inner_tensors[name] for name in cls.positional_inner_tensor_names),
+        *aliased_inner_values[: len(cls.positional_inner_tensor_names)],
         *self.positional_metadata,
         outer_size=aliased.size(),
         outer_stride=aliased.stride(),
-        **{name: aliased_inner_tensors[name] for name in cls.keyword_inner_tensor_names},
+        **dict(
+            zip(
+                cls.keyword_inner_tensor_names,
+                aliased_inner_values[len(cls.positional_inner_tensor_names) :],
+                strict=True,
+            )
+        ),
         **self.keyword_metadata,
     )
 
@@ -1570,16 +1513,11 @@ def _[WrapperType: MokitWrapperTensorBase](
 
     self.has_same_attributes(src, strict=True, raise_on_mismatch=True)
 
-    field_aliasing_group = src.tensor_field_aliasing_groups()
-    self.has_same_tensor_field_aliasing(
-        field_aliasing_group,
-        raise_on_mismatch=True,
-    )
-
-    apply_fn(
-        [getattr(src, group[0]) for group in field_aliasing_group],
+    names = cls.inner_tensor_names()
+    apply_fn_by_id(
+        [getattr(src, name) for name in names],
         lambda source, *, dest: func(dest, source, non_blocking=non_blocking),
-        dest=[getattr(self, group[0]) for group in field_aliasing_group],
+        dest=[getattr(self, name) for name in names],
     )
 
     return self
@@ -1665,9 +1603,9 @@ def _[WrapperType: MokitWrapperTensorBase](
             f"and memory_format; handle and remove {requested_conversions} before delegating"
         )
 
-    field_aliasing_group = self.tensor_field_aliasing_groups()
-    new_unique_tensors = apply_fn(
-        (getattr(self, group[0]) for group in field_aliasing_group),
+    names = cls.inner_tensor_names()
+    new_inner_tensor_values = apply_fn_by_id(
+        [getattr(self, name) for name in names],
         lambda src: func(
             src,
             device=device,
@@ -1676,10 +1614,6 @@ def _[WrapperType: MokitWrapperTensorBase](
             memory_format=memory_format,
         ),
     )
-
-    new_inner_tensors = {
-        name: new_unique_tensors[group_id] for group_id, group in enumerate(field_aliasing_group) for name in group
-    }
 
     target_device = self.device if device is None else device
     outer_tensor = cls._make_outer_tensor(
@@ -1694,11 +1628,17 @@ def _[WrapperType: MokitWrapperTensorBase](
 
     initializer = cast(Callable[..., None], outer_tensor.__init__)
     initializer(
-        *(new_inner_tensors[name] for name in cls.positional_inner_tensor_names),
+        *new_inner_tensor_values[: len(cls.positional_inner_tensor_names)],
         *self.positional_metadata,
         outer_size=outer_tensor.size(),
         outer_stride=outer_tensor.stride(),
-        **{name: new_inner_tensors[name] for name in cls.keyword_inner_tensor_names},
+        **dict(
+            zip(
+                cls.keyword_inner_tensor_names,
+                new_inner_tensor_values[len(cls.positional_inner_tensor_names) :],
+                strict=True,
+            )
+        ),
         **self.keyword_metadata,
     )
 
