@@ -1566,7 +1566,7 @@ implements = MokitWrapperTensorBase.implements
 def _[WrapperType: MokitWrapperTensorBase](
     cls: type[WrapperType],
     func: OpOverload,
-    types: tuple[type[WrapperType]],
+    types: tuple[type[Any], ...],
     self: WrapperType,
     *,
     memory_format: torch.memory_format | None = None,
@@ -1633,7 +1633,7 @@ def _[WrapperType: MokitWrapperTensorBase](
 def _[WrapperType: MokitWrapperTensorBase](
     cls: type[WrapperType],
     func: OpOverload,
-    types: tuple[type[WrapperType]],
+    types: tuple[type[Any], ...],
     self: WrapperType,
     *,
     memory_format: torch.memory_format | None = None,
@@ -1697,7 +1697,7 @@ def _[WrapperType: MokitWrapperTensorBase](
 def _[WrapperType: MokitWrapperTensorBase](
     cls: type[WrapperType],
     func: OpOverload,
-    types: tuple[type[WrapperType]],
+    types: tuple[type[Any], ...],
     self: WrapperType,
 ) -> WrapperType:
     """
@@ -1760,7 +1760,7 @@ def _[WrapperType: MokitWrapperTensorBase](
 def _[WrapperType: MokitWrapperTensorBase](
     cls: type[WrapperType],
     func: OpOverload,
-    types: tuple[type[WrapperType]],
+    types: tuple[type[Any], ...],
     self: WrapperType,
     src: WrapperType,
     non_blocking: bool = False,
@@ -1813,7 +1813,7 @@ def _[WrapperType: MokitWrapperTensorBase](
 def _[WrapperType: MokitWrapperTensorBase](
     cls: type[WrapperType],
     func: OpOverload,
-    types: tuple[type[WrapperType]],
+    types: tuple[type[Any], ...],
     self: WrapperType,
     *,
     dtype: torch.dtype | None = None,
