@@ -5486,6 +5486,212 @@ def test_torch_export_clone_smoke() -> None:
     assert isinstance(exported, torch.export.ExportedProgram)
 
 
+class _AliasModule(torch.nn.Module):
+    """A module that aliases its input for PT2 tests."""
+
+    def forward(self, tensor: torch.Tensor) -> torch.Tensor:
+        """Return an alias of the input."""
+        return torch.ops.aten.alias.default(tensor)
+
+
+class _DetachModule(torch.nn.Module):
+    """A module that detaches its input for PT2 tests."""
+
+    def forward(self, tensor: torch.Tensor) -> torch.Tensor:
+        """Return a detached input."""
+        return torch.ops.aten.detach.default(tensor)
+
+
+class _ToCopyModule(torch.nn.Module):
+    """A module that copies its input for PT2 tests."""
+
+    def forward(self, tensor: torch.Tensor) -> torch.Tensor:
+        """Return a copy of the input."""
+        return torch.ops.aten._to_copy.default(tensor)
+
+
+class _CopyModule(torch.nn.Module):
+    """A module that copies into a proxy-tracked destination."""
+
+    def forward(self, tensor: torch.Tensor) -> torch.Tensor:
+        """Return a clone updated by ``copy_``."""
+        destination = tensor.clone()
+        destination.copy_(tensor)
+        return destination
+
+
+class _CloneOutModule(torch.nn.Module):
+    """A module that clones into a proxy-tracked destination."""
+
+    def forward(self, tensor: torch.Tensor) -> torch.Tensor:
+        """Return a proxy-tracked destination updated by ``clone.out``."""
+        destination = tensor.clone()
+        torch.ops.aten.clone.out(tensor, out=destination)
+        return destination
+
+
+class _CloneOutInputModule(torch.nn.Module):
+    """A module that clones into an input destination."""
+
+    def forward(self, tensor: torch.Tensor, out: torch.Tensor) -> torch.Tensor:
+        """Return the input destination updated by ``clone.out``."""
+        torch.ops.aten.clone.out(tensor, out=out)
+        return out
+
+
+class _InternalCloneOutModule(torch.nn.Module):
+    """A module that creates an untracked wrapper destination."""
+
+    def forward(self, tensor: _Wrapper) -> _Wrapper:
+        """Return a destination constructed inside the traced graph."""
+        # The constructor runs inside tracing, so the destination has no proxy slot.
+        out = _Wrapper(torch.empty_like(tensor.payload))
+        torch.ops.aten.clone.out(tensor, out=out)
+        return out
+
+
+class _NegWrapper(_DefaultNewWrapper):
+    """A wrapper with a registered negation handler."""
+
+
+@_NegWrapper.implements(torch.ops.aten.neg.default)
+@unpack_args
+def _(
+    cls: type[_NegWrapper],
+    func: OpOverload,
+    types: tuple[type[_NegWrapper]],
+    self: _NegWrapper,
+) -> _NegWrapper:
+    """Negate the payload and preserve the tag."""
+    return cls(
+        self.payload.neg(),
+        self.tag,
+        outer_size=self.size(),
+        outer_stride=self.stride(),
+    )
+
+
+class _NegModule(torch.nn.Module):
+    """A module that negates its input through a registered handler."""
+
+    def forward(self, tensor: torch.Tensor) -> torch.Tensor:
+        """Return the negated input."""
+        return torch.neg(tensor)
+
+
+_REGISTERED_HANDLER_MODULES = (
+    _CloneModule,
+    _AliasModule,
+    _DetachModule,
+    _ToCopyModule,
+    _CopyModule,
+    _CloneOutModule,
+)
+
+_REGISTERED_HANDLER_IDS = ("clone", "alias", "detach", "_to_copy", "copy_", "clone.out")
+
+_AOT_EAGER_MODULES = (_CloneModule, _ToCopyModule, _CopyModule, _CloneOutModule)
+
+_AOT_EAGER_IDS = ("clone", "_to_copy", "copy_", "clone.out")
+
+
+def _make_pt2_wrapper() -> _Wrapper:
+    """Create a wrapper with all four field groups for PT2 tests."""
+    return _Wrapper(torch.arange(6, dtype=torch.float32).reshape(2, 3))
+
+
+def _assert_wrapper_state(expected: _Wrapper, actual: _Wrapper) -> None:
+    """Assert that a PT2 result preserves the wrapper's fields and geometry."""
+    assert type(actual) is type(expected)
+    assert actual.shape == expected.shape
+    assert actual.stride() == expected.stride()
+    assert actual.tag == expected.tag
+    assert actual.note == expected.note
+    assert torch.equal(actual.payload, expected.payload)
+    assert torch.equal(actual.bias, expected.bias)
+
+
+@pytest.mark.parametrize("module_type", _REGISTERED_HANDLER_MODULES, ids=_REGISTERED_HANDLER_IDS)
+def test_torch_compile_eager_registered_handlers(module_type: type[torch.nn.Module]) -> None:
+    """Test that registered base handlers survive an eager compile trace."""
+    wrapper = _make_pt2_wrapper()
+
+    result = torch.compile(module_type(), backend="eager", fullgraph=True)(wrapper)
+
+    _assert_wrapper_state(wrapper, result)
+
+
+@pytest.mark.parametrize("module_type", _REGISTERED_HANDLER_MODULES, ids=_REGISTERED_HANDLER_IDS)
+def test_torch_export_registered_handlers(module_type: type[torch.nn.Module]) -> None:
+    """Test that registered base handlers export and run through torch.export."""
+    wrapper = _make_pt2_wrapper()
+
+    exported = torch.export.export(module_type(), (wrapper,))
+    result = exported.module()(wrapper)
+
+    _assert_wrapper_state(wrapper, result)
+
+
+@pytest.mark.parametrize("module_type", _AOT_EAGER_MODULES, ids=_AOT_EAGER_IDS)
+def test_torch_compile_aot_eager_registered_handlers(module_type: type[torch.nn.Module]) -> None:
+    """Test that AOTAutograd-compatible registered handlers survive compilation."""
+    wrapper = _make_pt2_wrapper()
+
+    result = torch.compile(module_type(), backend="aot_eager", fullgraph=True)(wrapper)
+
+    _assert_wrapper_state(wrapper, result)
+
+
+# AOTAutograd functionalizes alias/detach into as_strided, which subclasses own.
+@pytest.mark.parametrize("module_type", (_AliasModule, _DetachModule), ids=("alias", "detach"))
+def test_torch_compile_aot_eager_alias_and_detach_require_as_strided(module_type: type[torch.nn.Module]) -> None:
+    """Test that AOT alias/detach require a subclass ``as_strided`` handler."""
+    with pytest.raises(NotImplementedError, match="as_strided"):
+        torch.compile(module_type(), backend="aot_eager", fullgraph=True)(_make_pt2_wrapper())
+
+
+def test_torch_export_clone_out_with_traced_destination() -> None:
+    """Test that clone.out exports when its destination is a traced input."""
+    wrapper = _make_pt2_wrapper()
+    destination = _Wrapper(torch.empty_like(wrapper.payload))
+
+    exported = torch.export.export(_CloneOutInputModule(), (wrapper, destination))
+    result = exported.module()(wrapper, destination)
+
+    _assert_wrapper_state(wrapper, result)
+
+
+# Export refuses wrapper arguments that were not proxy-tracked as inputs.
+def test_torch_export_clone_out_rejects_unproxied_destination() -> None:
+    """Test that export rejects a destination created inside the traced graph."""
+    with pytest.raises(RuntimeError, match="NotImplemented"):
+        torch.export.export(_InternalCloneOutModule(), (_make_pt2_wrapper(),))
+
+
+@pytest.mark.parametrize("backend", ("eager", "aot_eager"))
+def test_torch_compile_custom_registered_handler(backend: str) -> None:
+    """Test that a subclass handler survives compilation."""
+    wrapper = _NegWrapper(torch.arange(4, dtype=torch.float32), outer_size=(4,), outer_stride=(1,))
+
+    result = torch.compile(_NegModule(), backend=backend, fullgraph=True)(wrapper)
+
+    assert type(result) is _NegWrapper
+    assert result.tag == wrapper.tag
+    assert torch.equal(result.payload, -wrapper.payload)
+
+
+def test_torch_export_custom_registered_handler() -> None:
+    """Test that a subclass handler exports and runs through torch.export."""
+    wrapper = _NegWrapper(torch.arange(4, dtype=torch.float32), outer_size=(4,), outer_stride=(1,))
+
+    exported = torch.export.export(_NegModule(), (wrapper,))
+    result = exported.module()(wrapper)
+
+    assert type(result) is _NegWrapper
+    assert result.tag == wrapper.tag
+    assert torch.equal(result.payload, -wrapper.payload)
+
+
 # ==============================================================================
 # Serialization
 # ==============================================================================
