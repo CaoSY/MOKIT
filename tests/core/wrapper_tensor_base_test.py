@@ -5,12 +5,15 @@
 
 import copy
 import pickle
+import warnings
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, ClassVar, Self, cast
 
 import pytest
 import torch
+from torch._dynamo.utils import warn_once_cache
+from torch._functorch._aot_autograd.autograd_cache import AOTAutogradCachePickler
 from torch._ops import OpOverload
 
 from mokit.core import MokitWrapperTensorBase
@@ -5690,6 +5693,57 @@ def test_torch_export_custom_registered_handler() -> None:
     assert type(result) is _NegWrapper
     assert result.tag == wrapper.tag
     assert torch.equal(result.payload, -wrapper.payload)
+
+
+# ------------------------------------------------------------------------------
+# _stable_hash_for_caching
+# ------------------------------------------------------------------------------
+
+
+class _StableHashWrapper(_Wrapper):
+    """A wrapper with a custom AOT autograd cache hash."""
+
+    def _stable_hash_for_caching(self) -> str:
+        """Return a deterministic custom cache hash."""
+        return "custom-stable-hash"
+
+
+def _make_aot_cache_pickler() -> AOTAutogradCachePickler:
+    """Create an AOT autograd cache pickler with a minimal graph module."""
+    return AOTAutogradCachePickler(torch.fx.symbolic_trace(torch.nn.Identity()))
+
+
+def _clear_stable_hash_warning_cache() -> None:
+    """Forget cached stable-hash warnings so pytest can observe them again."""
+    for message in tuple(warn_once_cache):
+        if "_stable_hash_for_caching" in message:
+            warn_once_cache.remove(message)
+
+
+def test_aot_autograd_cache_warns_for_wrapper_without_stable_hash() -> None:
+    """Test that the AOT autograd cache warns without a stable hash implementation."""
+    _clear_stable_hash_warning_cache()
+    pickler = _make_aot_cache_pickler()
+
+    with pytest.warns(UserWarning, match="_stable_hash_for_caching"):
+        _, args = pickler.reducer_override(_make_pt2_wrapper())
+
+    assert isinstance(args[0], str)
+    assert args[0]
+
+
+def test_aot_autograd_cache_uses_subclass_stable_hash() -> None:
+    """Test that a subclass stable hash replaces the warning fallback."""
+    _clear_stable_hash_warning_cache()
+    pickler = _make_aot_cache_pickler()
+    wrapper = _StableHashWrapper(torch.arange(6, dtype=torch.float32).reshape(2, 3))
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _, args = pickler.reducer_override(wrapper)
+
+    assert args == ("custom-stable-hash",)
+    assert not any("_stable_hash_for_caching" in str(warning.message) for warning in caught)
 
 
 # ==============================================================================
