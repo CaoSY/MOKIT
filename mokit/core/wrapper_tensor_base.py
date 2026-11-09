@@ -525,6 +525,21 @@ class MokitWrapperTensorBase(MokitTensorBase):
     supplied mapping and split the same way. ``__tensor_unflatten__`` receives ``outer_size`` and
     ``outer_stride`` separately.
 
+    PyTorch's AOT autograd cache can warn that a wrapper subclass does not implement
+    ``_stable_hash_for_caching``. The warning is emitted when the cache pickler hashes a
+    traceable wrapper subclass for a cache key and finds no hook. Without further context,
+    the base class deliberately relies on PyTorch's inherited fallback: it hashes the outer
+    shape and ``requires_grad``, the metadata returned by ``__tensor_flatten__`` after
+    stabilizing tuples/lists/dicts and replacing opaque custom classes with their type names,
+    and the metadata of each inner tensor. Subclasses can get rid of the warning by
+    implementing their own ``_stable_hash_for_caching``. The fallback is best-effort: PyTorch
+    cannot know whether ``__tensor_flatten__`` fully captures a subclass's semantics or
+    whether its metadata pickles deterministically. DTensor is the standard example - it
+    implements the hook to fold in its spec hash and local device
+    (``torch/distributed/tensor/_api.py:465``), because its identity is not recoverable from
+    inner-tensor metadata alone. The warning is a one-time nudge per process for subclasses
+    in that situation.
+
 
     **Implementation, Registration, and Dispatch of ATen Ops and Torch Functions**
 
