@@ -35,7 +35,7 @@ class HandlerProtocol[
         *args: Params.args,
         **kwargs: Params.kwargs,
     ) -> ReturnType:
-        """Dispatch an operation to the handler."""
+        """Invoke the handler with unpacked arguments."""
 
 
 class PackedHandlerProtocol[
@@ -54,7 +54,7 @@ class PackedHandlerProtocol[
         args: tuple[Any, ...],
         kwargs: dict[str, Any] | None,
     ) -> ReturnType:
-        """Invoke the packed handler."""
+        """Invoke the handler with packed arguments."""
 
 
 def unpack_args[
@@ -73,8 +73,9 @@ def unpack_args[
         handler: Handler accepting ``(cls, func, types, *args, **kwargs)``.
 
     Returns:
-        A handler accepting ``(cls, func, types, args, kwargs)`` and preserving the
-        handler's metadata parameter types and result type.
+        A handler accepting ``(cls, func, types, args, kwargs)``. ``functools.wraps``
+        preserves the wrapped handler's name, docstring, and annotations, and the result
+        type is preserved as ``ReturnType``.
 
     """
 
@@ -151,6 +152,9 @@ def _call_handler_from_table(
 ) -> tuple[bool, Any]:
     """
     Call a handler for ``func`` from ``owner_cls``'s handler table.
+
+    The table is read from ``owner_cls.__dict__``; the exact key is tried first, then the
+    ``None`` wildcard.
 
     Args:
         owner_cls: Class whose table is checked.
@@ -282,7 +286,20 @@ def _make_subclass_torch_function(
         args: tuple[Any, ...] = (),
         kwargs: dict[str, Any] | None = None,
     ) -> Any:
+        """
+        Dispatch a torch function through the handler table of ``owner_cls``.
 
+        Args:
+            cls: Runtime wrapper class.
+            func: The torch function being called.
+            types: Types of the participating arguments.
+            args: Positional arguments.
+            kwargs: Keyword arguments, or ``None``.
+
+        Returns:
+            The handler result, or the result after delegating to the parent dispatcher.
+
+        """
         found, result = _call_handler_from_table(owner_cls, "_TORCH_FN_TABLE", cls, func, types, args, kwargs)
         if found:
             return result
@@ -774,9 +791,9 @@ class MokitWrapperTensorBase(MokitTensorBase):
         """
         Create the outer wrapper shell.
 
-        Subclasses that need different shell metadata, or whose field names collide with
-        the recognized shell keywords, must override this method. They may reuse it with
-        ``super().__new__(cls, *args, outer_size=..., outer_stride=..., **kwargs)``.
+        Subclasses that need different shell metadata, or that repurpose a recognized shell
+        keyword as an ordinary field value, must override this method. They may reuse it
+        with ``super().__new__(cls, *args, outer_size=..., outer_stride=..., **kwargs)``.
 
         Args:
             *args: Positional constructor field values, accepted for symmetry with
@@ -793,7 +810,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
             The outer wrapper shell.
 
         Raises:
-            TypeError: If ``outer_size`` is not a valid size.
+            TypeError: If the shell factory rejects the provided geometry or shell metadata.
 
         """
         return cls._make_outer_tensor(
@@ -816,7 +833,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
     @classmethod
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """
-        Validate the four flatten-protocol class attributes after subclass creation.
+        Validate the resolved flatten-protocol class attributes after subclass creation.
 
         Args:
             **kwargs: Class keyword arguments forwarded to the next base class.
@@ -853,8 +870,8 @@ class MokitWrapperTensorBase(MokitTensorBase):
         Return a representation of the wrapper and its declared fields.
 
         Declared field values are formatted with ``repr``. Tensor attributes are printed
-        first; declared fields follow, skipping names already printed as tensor
-        attributes.
+        first; declared fields follow in ``_FLATTEN_ATTR_NAMES`` order, skipping names
+        already printed as tensor attributes.
 
         Args:
             tensor_contents: Optional pre-rendered content string. If not ``None``, it is
@@ -920,8 +937,8 @@ class MokitWrapperTensorBase(MokitTensorBase):
         Flatten the wrapper into inner tensor names and metadata.
 
         Returns:
-            The inner tensor names in ``inner_tensor_names`` order and the metadata
-            values in ``metadata_names`` order.
+            The inner tensor names in ``inner_tensor_names()`` order and the metadata
+            values in ``metadata_names()`` order.
 
         """
         cls = type(self)
@@ -1017,8 +1034,8 @@ class MokitWrapperTensorBase(MokitTensorBase):
         """
         Return a decorator that registers torch function handlers on this class.
 
-        The handler must accept ``(cls, func, types, args, kwargs)``. If no functions are
-        given, the handler is registered as a wildcard for unmatched functions. The
+        The registered handler accepts ``(cls, func, types, args, kwargs)``. If no functions
+        are given, the handler is registered as a wildcard for unmatched functions. The
         factory validates ``override``, key types, hashability, and duplicate keys. The
         returned decorator performs the registration when applied.
 
@@ -1034,8 +1051,13 @@ class MokitWrapperTensorBase(MokitTensorBase):
                 * The factory receives a non-bool ``override``.
                 * The factory receives a key that is not callable.
                 * The factory receives a key that is not hashable.
+                * The decorated handler is not callable.
+                * The class's handler table is not a dict.
 
-            KeyError: If the factory receives a duplicate key.
+            KeyError: If any of the following hold:
+                * The factory receives a duplicate key.
+                * Registration conflicts with an existing key and ``override`` is false.
+                * The class defines its own ``__torch_function__`` without its own ``_TORCH_FN_TABLE``.
 
         """
         if not isinstance(override, bool):
@@ -1132,8 +1154,8 @@ class MokitWrapperTensorBase(MokitTensorBase):
         """
         Return a decorator that registers ATen operator handlers on this class.
 
-        The handler must accept ``(cls, func, types, args, kwargs)``. If no operators are
-        given, the handler is registered as a wildcard for unmatched operators. The
+        The registered handler accepts ``(cls, func, types, args, kwargs)``. If no operators
+        are given, the handler is registered as a wildcard for unmatched operators. The
         factory validates ``override``, key types, hashability, and duplicate keys. The
         returned decorator performs the registration when applied. Each operator must be
         an ``OpOverload``; an ``OpOverloadPacket`` such as ``torch.ops.aten.permute`` is
@@ -1151,8 +1173,13 @@ class MokitWrapperTensorBase(MokitTensorBase):
                 * The factory receives a non-bool ``override``.
                 * The factory receives an operator that is not an ``OpOverload``.
                 * The factory receives a key that is not hashable.
+                * The decorated handler is not callable.
+                * The class's handler table is not a dict.
 
-            KeyError: If the factory receives a duplicate key.
+            KeyError: If any of the following hold:
+                * The factory receives a duplicate key.
+                * Registration conflicts with an existing key and ``override`` is false.
+                * The class defines its own ``__torch_dispatch__`` without its own ``_ATEN_OP_TABLE``.
 
         """
         if not isinstance(override, bool):
@@ -1419,7 +1446,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
         Split processed inner tensor values into positional and keyword groups.
 
         Args:
-            values: The processed inner tensor values in ``inner_tensor_names`` order.
+            values: The processed inner tensor values in ``inner_tensor_names()`` order.
 
         Returns:
             The positional inner tensor values and the keyword inner tensor values keyed
@@ -1457,9 +1484,9 @@ class MokitWrapperTensorBase(MokitTensorBase):
         """
         Apply a metadata-only operator to the outer tensor shell.
 
-        The operator runs with Python dispatch disabled, so it receives the wrapper as a
-        storage-free Tensor instead of re-entering this dispatcher. The result is retyped
-        to the wrapper class. Only view and metadata operators are supported;
+        The operator runs with ``__torch_dispatch__`` disabled, so it receives the wrapper
+        as a storage-free Tensor instead of re-entering this dispatcher. The result is
+        retyped to the wrapper class. Only view and metadata operators are supported;
         data-dependent operators must not use this method because the outer shell has no
         storage.
 
@@ -1532,7 +1559,7 @@ def _[WrapperType: MokitWrapperTensorBase](
     """
     Clone a wrapper tensor by cloning each inner tensor once per object identity.
 
-    Two field names that reference the same tensor object share one clone, preserving
+    Two fields that reference the same tensor object share one clone, preserving
     exact-object aliasing such as tied fields. Distinct tensor objects that share storage
     through views receive independent clones, so their storage-level aliasing is not
     preserved. Detecting aliasing by data pointer would require cloning the shared storage
@@ -1668,9 +1695,9 @@ def _[WrapperType: MokitWrapperTensorBase](
     necessarily gaining view, version, or autograd metadata, while custom tensor
     subclasses dispatch to their own handlers.
 
-    The shell is created with ``as_subclass`` while Python dispatch is disabled, which
-    bypasses ``__new__`` and ``__tensor_unflatten__``. The subclass ``__init__`` is then
-    called with the transformed inner tensors and the original metadata references,
+    The shell is created with ``as_subclass`` while ``__torch_dispatch__`` is disabled,
+    which bypasses ``__new__`` and ``__tensor_unflatten__``. The subclass ``__init__`` is
+    then called with the transformed inner tensors and the original metadata references,
     allowing each wrapper class to finish its own Python initialization.
 
     Args:
