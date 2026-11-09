@@ -347,35 +347,83 @@ class MokitWrapperTensorBase(MokitTensorBase):
     """
     The base class for MOKIT wrapper tensor subclasses.
 
-    Subclasses inherit the dispatch helpers and the PT2 flatten/unflatten helpers. All four
-    name tuples below exist by default and are empty; an empty tuple means there are no
-    fields of that kind. When overridden, each must be a tuple of strings, no name may
-    appear more than once across the four tuples, and none may use the reserved names
-    ``outer_size``, ``outer_stride``, ``inner_tensors``, ``positional_inner_tensors``,
-    ``keyword_inner_tensors``, ``metadata``, ``positional_metadata``,
-    ``keyword_metadata``, ``inner_tensor_names``, or ``metadata_names``.
+    **Inner / Outer Tensors and Metadata**
 
-    Every name listed in any of the four attributes declares a field that must exist on the
-    instance. The base does not validate field values; a field may be ``None``. PyTorch's
-    tracing protocol additionally requires each inner-tensor name to resolve to a tensor or
-    a registered opaque type.
+    A wrapper tensor is a ``torch.Tensor`` (usually storage-free) whose data and metadata are
+    exposed through Python attributes. The outer representative ``torch.Tensor`` is referred
+    to as the outer tensor or the shell tensor. Fields are split into inner tensors and
+    metadata.
 
-    The attributes follow normal Python MRO inheritance; if multiple bases define them, the
-    first definition in the MRO is used. A subclass that adds, removes, or renames a
-    flattened field must override the affected tuples explicitly, for example by extending
-    the parent tuple. The base cannot detect fields that are not declared in them.
+    Inner tensors store real data and participate in PyTorch's tracing protocol; metadata values
+    are opaque to PyTorch. Each kind is also split into positional and keyword constructor groups.
+    Their names are held in four class attributes:
 
-    Attributes:
-        positional_inner_tensor_names: Names of inner tensors passed positionally to ``__init__`` and
-            ``__new__``, in order.
-        positional_metadata_names: Names of non-``Tensor`` attributes passed positionally to
-            ``__init__`` and ``__new__``, in order.
+    Class Attributes:
+        positional_inner_tensor_names: Names of inner tensors passed positionally to
+            ``__new__`` and ``__init__``, in order.
+        positional_metadata_names: Names of metadata values passed positionally to
+            ``__new__`` and ``__init__``, in order.
         keyword_inner_tensor_names: Names of inner tensors passed as keyword arguments to
-            ``__init__`` and ``__new__``.
-        keyword_metadata_names: Names of non-``Tensor`` attributes passed as keyword
-            arguments to ``__init__`` and ``__new__``.
+            ``__new__`` and ``__init__``.
+        keyword_metadata_names: Names of metadata values passed as keyword arguments to
+            ``__new__`` and ``__init__``.
 
-    Both ``__new__`` and ``__init__`` must accept calls of the form::
+    All four default to ``()``. Every listed name must exist on the instance; the base does
+    not validate field values, so a field may be ``None``. PyTorch's tracing protocol
+    additionally requires each inner-tensor name to resolve to a tensor or a registered
+    opaque type. Each attribute must be a tuple of strings; names must be unique across the
+    four tuples and must not use a reserved name listed in ``_RESERVED_FIELD_NAMES``.
+    ``__init_subclass__`` enforces these rules when each subclass is created.
+
+    The following helpers expose these names and field values on an instance::
+
+        def __repr__(self, *, tensor_contents: str | None = None) -> str: ...
+
+        @classmethod
+        def inner_tensor_names(cls: type[Self]) -> Iterator[str]: ...
+
+        @classmethod
+        def metadata_names(cls: type[Self]) -> Iterator[str]: ...
+
+        @property
+        def inner_tensors(self: Self) -> Iterator[torch.Tensor | CustomClassBase]: ...
+
+        @property
+        def positional_inner_tensors(self: Self) -> Iterator[torch.Tensor | CustomClassBase]: ...
+
+        @property
+        def keyword_inner_tensors(self: Self) -> Iterator[tuple[str, torch.Tensor | CustomClassBase]]: ...
+
+        @property
+        def metadata(self: Self) -> Iterator[Any]: ...
+
+        @property
+        def positional_metadata(self: Self) -> Iterator[Any]: ...
+
+        @property
+        def keyword_metadata(self: Self) -> Iterator[tuple[str, Any]]: ...
+
+
+    For each kind, the canonical flatten order is the positional names followed by the
+    keyword names: ``inner_tensor_names()`` chains ``positional_inner_tensor_names`` and
+    ``keyword_inner_tensor_names``, while ``metadata_names()`` does the same for metadata.
+    The separate ``_FLATTEN_ATTR_NAMES`` attribute does not affect flattening; it fixes the
+    order in which the four tuples are validated and printed by ``__repr__``.
+
+    The accessors listed above return a fresh iterator on every access and yield values by
+    reference; ``__repr__`` consumes these values and returns a string. The class tuple is
+    read when the accessor creates the iterator; each instance field is read with
+    ``getattr`` as the iterator advances. Reassigning an instance field before its slot is
+    consumed changes the yielded value; rebinding a class tuple after the iterator is created
+    does not. ``_split_inner_tensor_values`` is a private helper for handlers: given processed
+    values in canonical order, it returns the positional values and a name-keyed mapping
+    of the keyword values.
+
+
+    **Constructor**
+
+    In ``MokitWrapperTensorBase`` and its subclasses, both ``__new__`` and ``__init__`` must
+    accept the constructor call::
 
         cls(
             *inner_tensor_values,
@@ -386,148 +434,305 @@ class MokitWrapperTensorBase(MokitTensorBase):
             **keyword_metadata_values,
         )
 
-    The first ``*`` group contains the values named by ``positional_inner_tensor_names``; the second
-    contains the values named by ``positional_metadata_names``. The ``**`` groups use the names from
-    the keyword tuples. The two geometry arguments may default to ``None`` for direct
-    construction, but ``__tensor_unflatten__`` always passes them explicitly. They are
-    reserved keyword names and must not appear in the keyword tuples.
+    The two ``*`` groups and two ``**`` groups map to the four class attribute name groups one
+    by one. ``outer_size`` and ``outer_stride`` are reserved geometry keywords; direct
+    construction may default them to ``None``. These six argument groups carry exactly the
+    information that ``__tensor_unflatten__`` receives: the split of ``inner_tensors`` and
+    ``metadata`` plus the two geometry values. The positional signature must therefore place
+    all positional inner tensors, in ``positional_inner_tensor_names`` order, before all
+    positional metadata, in ``positional_metadata_names`` order. By default, the outer wrapper
+    is created in ``__new__`` through ``_make_outer_tensor``. It carries size, stride, dtype,
+    device, layout, and requires-grad state but no storage. Inner tensors hold the data that
+    operations are forwarded to, and metadata fields hold opaque Python state; the subclass's
+    ``__init__`` initializes both. Python passes the same arguments to both ``__new__`` and
+    ``__init__``. The base's methods and operation handlers assume this storage-free design.
 
-    ``__new__`` is responsible for creating or customizing the outer shell; ``__init__``
-    is responsible for initializing the subclass's Python fields. ``__new__`` receives
-    the same arguments as ``__init__`` but does not initialize fields.
+    The base always reads declared field values through ``getattr(self, ...)`` and never
+    assigns individual fields itself; it delegates field initialization to the subclass
+    constructor. The ``self.field = value`` pattern is therefore not the only valid way to
+    consume a declared field value: a field may be backed by any attribute that
+    ``getattr(self, name)`` resolves. For example, a declared ``dtype`` field may be consumed
+    by shell construction or other subclass logic without assigning ``self.dtype``; the helper
+    methods still read it through ``getattr(self, "dtype")``.
 
-    The base implements ``__new__`` as a thin adapter that maps recognized outer metadata
-    from the constructor arguments and delegates to ``_make_outer_tensor``. It recognizes
-    ``dtype``, ``layout``, ``device``, ``pin_memory``, ``requires_grad``,
-    ``storage_offset``, ``memory_format``, ``storage_size``,
-    ``dispatch_sizes_strides_policy``, ``dispatch_device``, ``dispatch_layout``, and
-    ``_extra_dispatch_keys`` in the constructor keyword arguments and otherwise uses
-    factory defaults.
+    A subclass may need finer control over outer-shell creation. The following private
+    helpers are provided for this purpose:
 
-    ``_make_outer_tensor`` is a classmethod and the eventual creator of the outer shell;
-    its default implementation forwards its arguments to
-    ``torch.Tensor._make_wrapper_subclass``. Both ``__new__`` and ``_clone_outer_tensor``
-    delegate to it, and the ``_to_copy.default`` handler uses it directly. Overriding
-    ``_make_outer_tensor`` changes shell construction for new construction, cloning, and
-    ``_to_copy``.
+    - ``_make_outer_tensor`` creates a new outer tensor. Its default implementation forwards
+      its arguments to ``torch.Tensor._make_wrapper_subclass``. The default ``__new__`` maps
+      ``outer_size``/``outer_stride`` and recognized shell keywords to this helper.
 
-    ``_clone_outer_tensor`` is an instance method that reads observable outer metadata from
-    ``self`` and delegates to ``type(self)._make_outer_tensor``. The
-    ``aten.clone.default`` handler uses ``_clone_outer_tensor`` to create the clone's
-    outer shell, forwards ``aten.clone.default`` to the inner tensors, and initializes the
-    Python fields.
+    - ``_clone_outer_tensor`` rebuilds a shell for a clone from observable metadata. It
+      resolves the requested memory format first, then calls ``_make_outer_tensor``
+      internally.
 
-    The default ``_clone_outer_tensor`` copies only observable metadata and does not carry
-    ``storage_offset`` or ``storage_size``, matching plain tensor clone behavior. It also
-    cannot recover ``dispatch_sizes_strides_policy``, ``dispatch_device``,
-    ``dispatch_layout``, or ``_extra_dispatch_keys`` because PyTorch exposes no public
-    getters for those shell settings. A subclass that uses them must override
-    ``_clone_outer_tensor`` or retain the configuration itself.
+    - ``_apply_fn_to_outer_tensor`` applies view ops to the outer tensor. Using it for other
+      ops may fail because they may access storage that the outer tensor does not have.
 
-    The default ``__new__`` requires both geometry arguments, so a subclass that supports
-    direct construction without them must override ``__new__``. A subclass with field
-    names that collide with the recognized shell keywords must also override
-    ``__new__``. To customize shell creation, override ``_make_outer_tensor``; to
-    customize only clone-time shell reconstruction, override ``_clone_outer_tensor``.
+    Shell construction has two further constraints. The default ``__new__`` maps
+    ``outer_size``/``outer_stride`` to ``size``/``strides`` and recognizes the remaining
+    keyword arguments of ``torch.Tensor._make_wrapper_subclass``: ``storage_offset``,
+    ``memory_format``, ``dtype``, ``layout``, ``device``, ``pin_memory``, ``requires_grad``,
+    ``dispatch_sizes_strides_policy``, ``dispatch_device``, ``dispatch_layout``,
+    ``_extra_dispatch_keys``, and ``storage_size``. Therefore,
 
-    The outer ``storage_offset`` is synthetic for a wrapper and is ignored. The outer
-    ``layout`` is meaningful: it defaults to ``torch.strided`` and is controlled by the
-    subclass through ``torch.Tensor._make_wrapper_subclass``. Because
-    ``__tensor_unflatten__`` does not receive ``layout``, a subclass that exposes a
-    non-strided or variable layout must preserve it itself, for example through metadata
-    or class-specific construction. ``layout`` is not a reserved field name. A declared
-    field named ``layout`` is allowed as long as ``getattr`` resolves it; for example, a
-    subclass can pass the value to ``_make_wrapper_subclass`` without assigning
-    ``self.layout``, so ``getattr`` reads the resulting tensor property. Direct assignment
-    to ``self.layout`` is not possible because ``Tensor.layout`` is read-only.
+    1. A field whose value is passed under one of these keyword names is consumed by
+       ``__new__`` as shell metadata. Declaring one of these names is acceptable only when
+       ``getattr(self, name)`` exposes the corresponding shell value (for example, ``dtype``
+       or ``layout``); using the name to shadow or repurpose that value is not recommended.
 
-    The base does not prevent a subclass from giving the outer wrapper its own storage.
-    However, the handlers registered on ``MokitWrapperTensorBase`` assume a storage-free
-    outer wrapper; subclasses that attach outer storage must override the affected
-    handlers.
+    2. The default ``_clone_outer_tensor`` copies only observable metadata, so it cannot
+       recover ``dispatch_sizes_strides_policy``, ``dispatch_device``, ``dispatch_layout``,
+       or ``_extra_dispatch_keys`` in the new shell. A subclass that needs to keep these
+       configurations must override ``_clone_outer_tensor`` or retain the configuration
+       itself. The default also does not pass ``storage_offset`` or ``storage_size`` to the
+       new shell: ``storage_offset`` is observable through ``Tensor.storage_offset()`` but
+       is intentionally reset, and ``storage_size`` has no public getter; the reset matches
+       plain tensor clone behavior.
 
-    ``__tensor_flatten__`` and ``__tensor_unflatten__`` are PyTorch's PT2 tracing protocol.
-    They do not implement pickle support. Pickle uses Tensor's default wrapper-subclass
-    path, which supports storage-free strided wrappers. Non-strided wrappers reach Tensor's
-    layout-specific reduction branches and fail explicitly; subclasses that need pickle
-    support for such layouts must override ``__reduce_ex__``. A concrete subclass must be
-    registered explicitly with ``mokit.serialization.torch_add_safe_global`` for
-    ``weights_only=True`` loading.
 
-    Dispatch registration and forwarding follow this workflow:
+    **PT2 Support**
 
-    1. A concrete subclass registers handlers with ``implements_torch_function`` for
-       torch functions or ``implements`` for ``OpOverload`` operators. The decorator
-       factory is side-effect free; applying the returned decorator validates the request
-       and then commits it. Validation failures - invalid, duplicate, or unhashable keys,
-       a non-callable handler, inconsistent class state, or key conflicts - leave the
-       class unchanged. Failures while installing the generated method or writing the
-       table are fatal. Registration ensures the class owns
-       ``_TORCH_FN_TABLE`` or ``_ATEN_OP_TABLE`` and installs a class-specific
-       ``__torch_function__`` or ``__torch_dispatch__`` when the class does not already
-       define one, using the corresponding ``_make_subclass_*`` factory. Each table maps
-       a function or operator to its handler; ``None`` is the wildcard key, and
-       ``override`` controls replacement of existing keys.
+    The base provides a default implementation for ``__tensor_flatten__`` and ``__tensor_unflatten__``
+    required by ``torch.compile`` and ``torch.export``. It relies on the inner / outer tensors
+    and metadata protocol introduced above.
 
-    2. At runtime, PyTorch calls the class-specific dispatch method. That method uses
-       ``_call_handler_from_table`` to search the current class's own table, checking the
-       exact function or operator first and the wildcard second. A match is invoked as
-       ``handler(cls, func, types, args, kwargs)``, where ``cls`` is the runtime subclass.
-       Forwarding is plain and performs no argument processing, so a handler must accept
-       the same signature as ``__torch_function__`` or ``__torch_dispatch__``.
+    ``__tensor_flatten__`` returns the inner tensor names in ``inner_tensor_names()`` order and a flat
+    tuple of metadata values in ``metadata_names()`` order. PyTorch treats the metadata as opaque; the
+    flat representation is private to the flatten/unflatten pair and may change as long as the pair
+    stays consistent.
 
-    3. If the current class has no match, the generated method calls the next
-       ``__torch_function__`` or ``__torch_dispatch__`` in the MRO with
-       ``super(owner_cls, cls)``. Each ancestor with a generated dispatcher repeats the
-       same table lookup. The effective order is therefore: runtime-class exact,
-       runtime-class wildcard, parent exact, parent wildcard, continuing through the MRO.
+    ``__tensor_unflatten__`` rebuilds the constructor call from the class attributes: the first
+    ``len(positional_metadata_names)`` metadata values are positional, the remaining values
+    are paired with ``keyword_metadata_names``, and inner tensors are looked up in the
+    supplied mapping and split the same way. ``__tensor_unflatten__`` receives ``outer_size`` and
+    ``outer_stride`` separately.
 
-    4. The root ``MokitWrapperTensorBase`` methods perform the final lookup. If no root
-       handler matches, ``__torch_function__`` returns ``NotImplemented`` unless ``cls``
-       is a subclass of every participating type; otherwise it forwards to the original
-       function with subclass dispatch disabled. ``__torch_dispatch__`` instead raises
-       ``NotImplementedError``. The handshake is applied only at this final layer, so
-       registered handlers in any class can still claim mixed-type calls.
 
-    5. A handler can continue the MRO lookup for the same key by calling
-       ``super(Owner, cls).__torch_dispatch__(func, types, args, kwargs)`` or the
-       ``__torch_function__`` counterpart. This is how a child handler composes with the
-       parent handler it overrides.
+    **Implementation, Registration, and Dispatch of ATen Ops and Torch Functions**
 
-    6. A class that defines its own ``__torch_function__`` or ``__torch_dispatch__``
-       bypasses the generated dispatcher. The custom method must own the corresponding
-       table and consult or delegate to it itself; otherwise registered handlers are
-       unreachable.
+    ``MokitWrapperTensorBase`` provides a mechanism for adding customized implementations of
+    ATen ops and torch functions, both at class definition time and after class creation.
+    Handlers registered on a class are reachable from its subclasses through the dispatcher's
+    MRO delegation. Registration uses two classmethod decorator factories, ``implements`` and
+    ``implements_torch_function``; they work in parallel and share the same pattern.
 
-    Handlers are operator-specific. When registering one, annotate its parameters and
-    return value to match that operator's actual dispatch call rather than the general
-    ``__torch_dispatch__`` or ``__torch_function__`` signature. A handler may accept the
-    packed ``(cls, func, types, args, kwargs)`` arguments directly, or use the optional
-    ``unpack_args`` helper to receive the operator's arguments unpacked. For example, the
-    default ``aten.clone.default`` handler uses ``unpack_args`` and declares
-    ``self: WrapperType``, ``memory_format: torch.memory_format | None``, and a
-    ``WrapperType`` return value. Registration accepts ``Callable[..., Any]`` and does not
-    enforce these annotations, but accurate annotations document each operator's contract.
+    A customized implementation for an ATen op or a torch function is called a handler. For
+    torch functions, registration involves three objects:
 
-    An ATen handler registered with ``implements`` cannot itself replace PyTorch's
-    backward. ``__torch_dispatch__`` runs below autograd, so the generated backward for
-    the operator may already be attached to the outer wrapper before the handler runs.
-    A subclass can provide custom differentiability in one of three ways:
+    - ``_TORCH_FN_TABLE`` maps torch functions to their handlers. A class that does not yet
+      own one installs it when its first handler is registered. A ``None`` key is a wildcard
+      match. Handler tables are read and written directly from ``cls.__dict__``, so they are
+      effectively not inherited; inheritance of registered handlers is simulated by the
+      lookup in ``__torch_function__`` described below.
 
-    1. Use the native outer-wrapper backward. Register only the forward handler and rely
-       on PyTorch's generated autograd formula. This is appropriate only when that formula
-       is compatible with the wrapper representation.
+    - ``__torch_function__`` is generated from a template and installed lazily by the first
+      registration on the class. At runtime it looks up the given torch function in its
+      table; if found, it runs the handler; otherwise it delegates to the next
+      ``__torch_function__`` in the MRO.
 
-    2. Define the autograd boundary at the public torch-function level. Register a
-       ``__torch_function__`` handler for the public function and call a
-       ``torch.autograd.Function`` or a custom operator with
-       ``torch.library.register_autograd``. The outer wrapper is then the autograd node,
-       and the custom ``backward`` is used directly. No reentrant dispatch is needed.
+    - ``implements_torch_function`` accepts torch functions and returns a decorator for the
+      handler. With no torch function it returns a decorator that registers the handler under
+      the ``None`` key. All validation happens before the class is mutated, so invalid keys
+      and conflicts leave the class unchanged; a failure while installing the generated
+      method or writing the table is fatal. On successful registration, the decorator writes
+      to the class's own ``_TORCH_FN_TABLE``.
 
-    3. Use the inner-autograd pattern: keep the outer wrapper non-grad, call a custom
-       ``torch.autograd.Function`` or custom operator on the inner tensors inside
-       ``torch.overrides.enable_reentrant_dispatch()``, and wrap the result in a fresh
-       wrapper. See https://github.com/albanD/subclass_zoo/blob/main/inner_autograd_tensor.py.
+
+    The ATen side has the same three counterparts, which cooperate in the same way:
+
+    - ``_ATEN_OP_TABLE``
+    - ``__torch_dispatch__``
+    - ``implements``
+
+
+    Both dispatchers forward their arguments to handlers unchanged. The ``unpack_args``
+    decorator adapts a handler that wants the forwarded ``*args`` and ``**kwargs`` unpacked.
+    As a convention, handlers should annotate parameters and return values to match the
+    operator's dispatch signature, although registration does not enforce the annotations.
+    For ATen handlers, results are passed through ``return_and_correct_aliasing``, so
+    schema-declared view, inplace, and ``out`` aliasing is applied to the outer wrappers.
+
+    For a generated dispatcher, lookup follows the runtime class's MRO:
+
+    1. The exact key in the class owning the dispatcher.
+    2. The wildcard key in the class owning the dispatcher.
+    3. The exact key in the next class in the MRO that owns a generated dispatcher.
+    4. That class's wildcard key.
+    5. Continue through the MRO all the way to ``MokitWrapperTensorBase``.
+    6. If no handler matches, ``MokitWrapperTensorBase.__torch_function__`` returns
+       ``NotImplemented`` unless the runtime class is a subclass of every participating
+       type; otherwise it forwards the call with subclass torch-function dispatch disabled.
+       The handshake is applied only at this final layer, so any registered handler can still
+       claim mixed-type calls. The root ``__torch_dispatch__`` raises ``NotImplementedError``.
+
+    A custom ``__torch_function__`` or ``__torch_dispatch__`` in the MRO receives the
+    delegation and may change this order.
+
+    The base registers ATen handlers for
+
+    - ``aten.clone.default``,
+    - ``aten.clone.out``,
+    - ``aten.alias.default``,
+    - ``aten.detach.default``,
+    - ``aten.copy_.default``,
+    - and ``aten._to_copy.default``.
+
+    They assume a storage-free outer wrapper. Each handler forwards the operation to the
+    declared inner tensors and creates, checks, or updates the outer shell as appropriate:
+    ``clone.default`` and ``_to_copy.default`` create a new shell, ``clone.out`` and
+    ``copy_.default`` update the destination, and ``alias.default`` and ``detach.default``
+    apply the operator to the shell as well. Inner tensors are processed once per exact-object
+    identity, so newly created results preserve exact-object aliasing among inner tensors; out
+    and in-place handlers check the destination's alias topology instead. Handlers that create
+    a new wrapper initialize it with the original metadata references; out and in-place
+    handlers leave the destination's metadata unchanged.
+
+
+    **Pickle Support**
+
+    Pickle uses ``__reduce_ex__`` instead of the PT2 flattening protocol. The base does not
+    implement a custom ``__reduce_ex__``; it uses the one inherited from ``torch.Tensor``,
+    which preserves a wrapper's Python fields automatically, including inner tensors and
+    metadata. In particular, it handles nested wrappers (inner tensors that are wrappers) and
+    shared inner tensor identities correctly. Only strided and ``_mkldnn`` layouts are
+    supported; sparse COO and sparse compressed layouts fail explicitly during reduction.
+    Loading with ``torch.load(..., weights_only=True)`` requires the concrete subclass to be
+    allowlisted, for example with ``mokit.serialization.torch_add_safe_global``.
+
+
+    **Deepcopy Support**
+
+    Deepcopy uses the inherited ``torch.Tensor.__deepcopy__`` path, which clones the wrapper
+    through ``aten.clone.default`` and deep-copies its Python fields. It preserves layout,
+    outer stride, and nested wrapper and inner-tensor relationships. A non-zero synthetic
+    storage offset is not supported and fails.
+
+
+    **Safetensors Support**
+
+    TODO: add Safetensors support.
+
+
+    **Defining a Subclass**
+
+    A subclass normally:
+
+    1. Declares the four field-name tuples, or inherits them. The tuples follow normal MRO
+       inheritance: each attribute resolves independently, so a subclass may inherit all
+       four, override a subset, or redeclare them. Overriding replaces the inherited tuple
+       rather than extending it; to remove a group, override it with ``()``.
+       ``__init_subclass__`` is itself inherited and validates the resolved values,
+       including inherited names, when each subclass is created.
+
+    2. Implements ``__init__`` to store every declared field, accepting the constructor
+       call above. It optionally implements ``__new__``. The default ``__new__`` requires
+       both geometry arguments, so a subclass supporting direct construction should derive
+       them from its fields and delegate to ``super().__new__``. A subclass that needs a
+       recognized shell keyword to carry an ordinary field value must override
+       ``__new__``.
+
+    3. Optionally overrides ``_make_outer_tensor`` to change shell creation, or
+       ``_clone_outer_tensor`` to change clone-time shell reconstruction.
+
+    4. Registers additional handlers through the concrete class, for example
+       ``@Subclass.implements(op)`` or ``@Subclass.implements_torch_function(func)``,
+       usually after the class body. The module-level ``implements`` in this module is the
+       base's classmethod bound to the base; using it registers on the base.
+
+    The internal ``_FLATTEN_ATTR_NAMES`` and ``_RESERVED_FIELD_NAMES`` are ordinary class attributes;
+    they may be overridden, but normally are not.
+
+    A subclass can define its own ``__torch_function__`` or ``__torch_dispatch__``; this
+    prevents installation of the generated dispatcher. If the subclass still wants to use the
+    registration mechanism, it must also define the corresponding table on the class, and the
+    custom dispatcher must consult or delegate to that table itself. A custom dispatcher can
+    still delegate to a parent class's dispatcher if needed.
+
+    During construction, the outer ``layout`` defaults to ``torch.strided`` and is controlled
+    through ``torch.Tensor._make_wrapper_subclass``. However, because ``__tensor_unflatten__``
+    does not receive ``layout``, unlike ``outer_size`` and ``outer_stride``, ``layout`` is not
+    automatically preserved in the default flatten/unflatten round trip. A subclass that
+    exposes a non-strided or variable layout must preserve it itself, for example through
+    metadata or class-specific construction.
+
+    The base does not prevent a subclass from giving the outer wrapper its own storage,
+    but its handlers assume a storage-free outer wrapper; such a subclass must override the
+    affected handlers. A subclass that needs pickle support for an unsupported layout must
+    override ``__reduce_ex__``.
+
+
+    **Examples**
+
+    A wrapper with one inner tensor and one metadata field::
+
+        from collections.abc import Sequence
+        from typing import Self
+
+        import torch
+        from torch._ops import OpOverload
+
+        from mokit.core import MokitWrapperTensorBase
+        from mokit.core.wrapper_tensor_base import unpack_args
+
+
+        class ScaledTensor(MokitWrapperTensorBase):
+            positional_inner_tensor_names = ("payload",)
+            keyword_metadata_names = ("scale",)
+
+            def __new__(
+                cls,
+                payload: torch.Tensor,
+                *,
+                scale: float,
+                outer_size: Sequence[int | torch.SymInt] | None = None,
+                outer_stride: Sequence[int | torch.SymInt] | None = None,
+            ) -> Self:
+                return super().__new__(
+                    cls,
+                    outer_size=payload.size() if outer_size is None else outer_size,
+                    outer_stride=payload.stride() if outer_stride is None else outer_stride,
+                    dtype=payload.dtype,
+                    device=payload.device,
+                )
+
+            def __init__(
+                self,
+                payload: torch.Tensor,
+                *,
+                scale: float,
+                outer_size: Sequence[int | torch.SymInt] | None = None,
+                outer_stride: Sequence[int | torch.SymInt] | None = None,
+            ) -> None:
+                self.payload = payload
+                self.scale = scale
+
+
+        @ScaledTensor.implements(torch.ops.aten.neg.default)
+        @unpack_args
+        def _(
+            cls: type[ScaledTensor],
+            func: OpOverload,
+            types: tuple[type[ScaledTensor], ...],
+            self: ScaledTensor,
+        ) -> ScaledTensor:
+            return cls(
+                self.payload.neg(),
+                scale=self.scale,
+                outer_size=self.size(),
+                outer_stride=self.stride(),
+            )
+
+
+        x = ScaledTensor(torch.ones(2, 3), scale=0.5)
+        y = x.clone()        # handled by the inherited clone.default handler
+        z = torch.neg(x)     # handled by the handler registered above
+
+        assert isinstance(y, ScaledTensor) and y.scale == 0.5
+        assert isinstance(z, ScaledTensor) and torch.equal(z.payload, -x.payload)
+        assert x.__tensor_flatten__() == (("payload",), (0.5,))
+        assert list(x.inner_tensor_names()) == ["payload"]
+        assert list(x.keyword_metadata) == [("scale", 0.5)]
 
     """
 
@@ -987,7 +1192,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
     @classmethod
     def inner_tensor_names(cls: type[Self]) -> Iterator[str]:
         """
-        Return an iterator over the inner tensor field names in authoritative flatten order.
+        Return an iterator over the inner tensor field names in canonical flatten order.
 
         The order is ``positional_inner_tensor_names`` followed by ``keyword_inner_tensor_names``.
         The class attributes are read when this method is called.
@@ -1001,7 +1206,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
     @classmethod
     def metadata_names(cls: type[Self]) -> Iterator[str]:
         """
-        Return an iterator over the metadata field names in authoritative flatten order.
+        Return an iterator over the metadata field names in canonical flatten order.
 
         The order is ``positional_metadata_names`` followed by ``keyword_metadata_names``.
         The class attributes are read when this method is called.
@@ -1018,8 +1223,8 @@ class MokitWrapperTensorBase(MokitTensorBase):
         Return an iterator over the declared inner tensor values.
 
         Returns:
-            An iterator over the declared inner tensor values in authoritative flatten
-            order, by reference.
+            An iterator over the declared inner tensor values in canonical flatten order, by
+            reference.
 
         """
         return (getattr(self, name) for name in type(self).inner_tensor_names())
@@ -1052,8 +1257,8 @@ class MokitWrapperTensorBase(MokitTensorBase):
         Return an iterator over the declared metadata values.
 
         Returns:
-            An iterator over the declared metadata values in authoritative flatten
-            order, by reference.
+            An iterator over the declared metadata values in canonical flatten order, by
+            reference.
 
         """
         return (getattr(self, name) for name in type(self).metadata_names())
