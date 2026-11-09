@@ -27,6 +27,15 @@ ALL_MX_CLASSES: list[type[MXFormat]] = [*MX_FORMAT_CLASSES, *MX_QUANT_CONFIG_CLA
 BLOCK_MX_CLASSES: list[type[BlockMXFormat]] = [BlockMXFormat, BlockMXQuantConfig]
 
 
+# ==============================================================================
+# MX format classes
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# __post_init__: elem_dtype_max
+# ------------------------------------------------------------------------------
+
+
 @pytest.mark.parametrize("cls", MX_QUANT_CONFIG_CLASSES)
 @pytest.mark.parametrize(
     ("dtype", "expected_max"),
@@ -56,11 +65,21 @@ def test_elem_dtype_max_must_be_positive(cls: type[MXQuantConfig]) -> None:
         cls(elem_dtype_max=0.0)
 
 
+# ------------------------------------------------------------------------------
+# __post_init__: elem_dtype
+# ------------------------------------------------------------------------------
+
+
 @pytest.mark.parametrize("cls", ALL_MX_CLASSES)
 def test_unsupported_elem_dtype(cls: type[MXFormat]) -> None:
     """Test that an unsupported element dtype is rejected."""
     with pytest.raises(ValueError, match="Supported element dtypes"):
         cls(elem_dtype=torch.float16)
+
+
+# ------------------------------------------------------------------------------
+# __post_init__: rounding_mode
+# ------------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("cls", MX_QUANT_CONFIG_CLASSES)
@@ -70,6 +89,11 @@ def test_invalid_rounding_mode(cls: type[MXQuantConfig]) -> None:
         cls(rounding_mode=cast(QuantizationRoundingMode, "rne"))
 
 
+# ------------------------------------------------------------------------------
+# __post_init__: scale_dtype
+# ------------------------------------------------------------------------------
+
+
 @pytest.mark.parametrize("cls", ALL_MX_CLASSES)
 def test_scale_dtype_is_fixed(cls: type[MXFormat]) -> None:
     """Test that a scale dtype other than E8M0 is rejected."""
@@ -77,11 +101,21 @@ def test_scale_dtype_is_fixed(cls: type[MXFormat]) -> None:
         cls(scale_dtype=torch.float32)
 
 
+# ------------------------------------------------------------------------------
+# __post_init__: scale_mode
+# ------------------------------------------------------------------------------
+
+
 @pytest.mark.parametrize("cls", MX_QUANT_CONFIG_CLASSES)
 def test_invalid_scale_mode(cls: type[MXQuantConfig]) -> None:
     """Test that a non-MXScaleCalculationMode scale mode is rejected."""
     with pytest.raises(ValueError, match="scale_mode"):
         cls(scale_mode=cast(MXScaleCalculationMode, "rceil"))
+
+
+# ------------------------------------------------------------------------------
+# __post_init__: granularity
+# ------------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("cls", ALL_MX_CLASSES)
@@ -114,6 +148,11 @@ def test_granularity_is_hardware_agnostic(cls: type[MXFormat], granularity: PerB
     assert cls(granularity=granularity).granularity == granularity
 
 
+# ------------------------------------------------------------------------------
+# __post_init__: block format
+# ------------------------------------------------------------------------------
+
+
 @pytest.mark.parametrize("cls", BLOCK_MX_CLASSES)
 def test_block_defaults_to_a_square_block(cls: type[BlockMXFormat]) -> None:
     """Test that block formats default to a two-dimensional square block."""
@@ -134,6 +173,11 @@ def test_block_accepts_a_square_block(cls: type[BlockMXFormat]) -> None:
     assert cls(granularity=PerBlock(64, 64)).granularity == PerBlock(64, 64)
 
 
+# ------------------------------------------------------------------------------
+# Class-level
+# ------------------------------------------------------------------------------
+
+
 @pytest.mark.parametrize("cls", ALL_MX_CLASSES)
 def test_is_a_frozen_slotted_dataclass(cls: type) -> None:
     """Test that every MX class is a frozen, slotted dataclass."""
@@ -144,10 +188,24 @@ def test_is_a_frozen_slotted_dataclass(cls: type) -> None:
         setattr(cls(), attribute, 1)
 
 
+# ==============================================================================
+# Serialization
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Safe-global registration
+# ------------------------------------------------------------------------------
+
+
 @pytest.mark.parametrize("cls", [MXScaleCalculationMode, *ALL_MX_CLASSES])
 def test_class_is_registered_as_safe_global(cls: type) -> None:
     """Test that every serializable MX class is registered for weights-only loading."""
     assert cls in torch.serialization.get_safe_globals(), f"{cls.__name__} is not registered as a safe global"
+
+
+# ------------------------------------------------------------------------------
+# Weights-only round trip
+# ------------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(

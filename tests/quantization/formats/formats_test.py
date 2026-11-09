@@ -19,6 +19,10 @@ from mokit.quantization.formats import (
     QuantizationRoundingMode,
 )
 
+# ==============================================================================
+# Granularity
+# ==============================================================================
+
 
 def test_granularity_is_a_frozen_slotted_dataclass() -> None:
     """Test that Granularity is a frozen, slotted dataclass."""
@@ -38,16 +42,43 @@ def test_granularity_subclasses(granularity: Granularity) -> None:
     assert isinstance(granularity, Granularity)
 
 
+# ==============================================================================
+# PerSlice
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# __init__
+# ------------------------------------------------------------------------------
+
+
 def test_per_slice_construction() -> None:
     """Test that PerSlice accepts positional and keyword axes."""
     assert PerSlice(1).axis == 1
     assert PerSlice(axis=1).axis == 1
 
 
+# ==============================================================================
+# PerDim
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# __init__
+# ------------------------------------------------------------------------------
+
+
 def test_per_dim_construction() -> None:
     """Test that PerDim accepts positional and keyword dims."""
     assert PerDim(0).dim == 0
     assert PerDim(dim=0).dim == 0
+
+
+# ==============================================================================
+# PerBlock
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# __init__
+# ------------------------------------------------------------------------------
 
 
 def test_per_block_construction() -> None:
@@ -63,11 +94,21 @@ def test_per_block_rejects_non_integers() -> None:
         PerBlock(32, cast(int, "64"))
 
 
+# ------------------------------------------------------------------------------
+# Class-level
+# ------------------------------------------------------------------------------
+
+
 def test_per_block_is_frozen() -> None:
     """Test that PerBlock cannot be mutated."""
     field = "block_size"
     with pytest.raises(dataclasses.FrozenInstanceError):
         setattr(PerBlock(32), field, (64,))
+
+
+# ------------------------------------------------------------------------------
+# __len__
+# ------------------------------------------------------------------------------
 
 
 def test_per_block_length() -> None:
@@ -76,10 +117,20 @@ def test_per_block_length() -> None:
     assert len(PerBlock(32, 64, 16)) == 3
 
 
+# ------------------------------------------------------------------------------
+# __iter__
+# ------------------------------------------------------------------------------
+
+
 def test_per_block_iteration() -> None:
     """Test that PerBlock iterates over its per-dimension sizes."""
     assert list(PerBlock(32, 64, 16)) == [32, 64, 16]
     assert 64 in PerBlock(32, 64, 16)
+
+
+# ------------------------------------------------------------------------------
+# __getitem__
+# ------------------------------------------------------------------------------
 
 
 def test_per_block_indexing() -> None:
@@ -96,11 +147,25 @@ def test_per_block_slicing_returns_per_block() -> None:
     assert sliced == PerBlock(64, 16)
 
 
+# ------------------------------------------------------------------------------
+# __eq__ / __hash__
+# ------------------------------------------------------------------------------
+
+
 def test_per_block_equality_and_hash() -> None:
     """Test that equal PerBlock values compare and hash equal."""
     assert PerBlock(32, 64) == PerBlock(32, 64)
     assert PerBlock(32, 64) != PerBlock(64, 32)
     assert hash(PerBlock(32, 64)) == hash(PerBlock(32, 64))
+
+
+# ==============================================================================
+# Serialization
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Safe-global registration
+# ------------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -110,6 +175,11 @@ def test_per_block_equality_and_hash() -> None:
 def test_class_is_registered_as_safe_global(cls: type) -> None:
     """Test that every serializable format class is registered for weights-only loading."""
     assert cls in torch.serialization.get_safe_globals(), f"{cls.__name__} is not registered as a safe global"
+
+
+# ------------------------------------------------------------------------------
+# Weights-only round trip
+# ------------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(

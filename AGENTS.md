@@ -63,3 +63,39 @@ def quantize(tensor: torch.Tensor, scale: torch.Tensor) -> torch.Tensor: ...
 
 Annotate every parameter and return type, and make them accurate — look a type up
 rather than guessing, since a wrong annotation is worse than none.
+
+### How to organize unit tests
+
+Tests live under `tests/`, mirroring the `mokit/` package layout.
+
+Name each test file after the module it tests: `mokit/foo/bar.py` becomes
+`tests/foo/bar_test.py`. For a package's `__init__.py`, use the package directory
+name: `mokit/foo/__init__.py` becomes `tests/foo/foo_test.py`, not
+`tests/foo/__init___test.py`. For example, `mokit/quantization/__init__.py` is tested
+by `tests/quantization/quantization_test.py`.
+
+Group tests by the class or function under test.
+
+- Give each tested class or function its own section.
+- Put tests for one of its methods, or for a helper function or class used only by
+  that class's tests, in a subsection of that class's section.
+- Keep class-level tests (for example, frozen or slotted dataclasses) in the class
+  section.
+- Use one combined section for a test parametrized across several related classes,
+  for example `FloatFormat and FloatQuantConfig` or `MX format classes`.
+- Use a `Serialization` section for cross-cutting weights-only loading tests.
+- Use a section named for the group for module-level constants, for example
+  `Dtype groups`.
+- Do not add sections for classes or functions without tests.
+
+Sections use `=` rules above and below the title; subsections use `-` rules:
+
+```python
+# ==============================================================================
+# Class or function name
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Method or helper name
+# ------------------------------------------------------------------------------
+```

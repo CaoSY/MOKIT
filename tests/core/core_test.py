@@ -9,6 +9,10 @@ import pytest
 
 from mokit.core import MokitConfigBase
 
+# ==============================================================================
+# MokitConfigBase
+# ==============================================================================
+
 
 def test_is_dataclass() -> None:
     """Test that MokitConfigBase is a dataclass."""
