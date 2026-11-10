@@ -12,8 +12,10 @@ from typing import Any, ClassVar, Self, cast
 
 import pytest
 import torch
+from torch._custom_class_base import CustomClassBase
 from torch._dynamo.utils import warn_once_cache
 from torch._functorch._aot_autograd.autograd_cache import AOTAutogradCachePickler
+from torch._library.opaque_object import register_custom_class
 from torch._ops import OpOverload
 
 from mokit.core import MokitWrapperTensorBase
@@ -4105,6 +4107,135 @@ def test_clone_default_honors_clone_outer_tensor_override() -> None:
     assert calls == [torch.contiguous_format]
     assert type(cloned) is _TrackingCloneWrapper
     assert cloned.stride() == (1,)
+
+
+# ------------------------------------------------------------------------------
+# Custom opaque inner tensors
+# ------------------------------------------------------------------------------
+
+
+class _OpaqueHandle(CustomClassBase):
+    """A registered opaque object used as an inner tensor field."""
+
+    def __init__(self, value: int) -> None:
+        """Store the handle value."""
+        self.value = value
+
+
+register_custom_class(_OpaqueHandle, typ="symbolic")
+
+
+class _OpaqueInnerWrapper(MokitWrapperTensorBase):
+    """A wrapper mixing tensor and opaque inner tensor fields."""
+
+    positional_inner_tensor_names = ("payload", "positional_handle")
+    positional_metadata_names = ("tag",)
+    keyword_inner_tensor_names = ("keyword_handle",)
+    keyword_metadata_names = ("note",)
+
+    def __new__(
+        cls,
+        payload: torch.Tensor,
+        positional_handle: _OpaqueHandle,
+        tag: object = "tag",
+        outer_size: Sequence[int | torch.SymInt] | None = None,
+        outer_stride: Sequence[int | torch.SymInt] | None = None,
+        *,
+        keyword_handle: _OpaqueHandle,
+        note: object = "note",
+        **kwargs: Any,
+    ) -> Self:
+        """Create a shell whose geometry follows the tensor payload."""
+        return super().__new__(
+            cls,
+            outer_size=payload.size() if outer_size is None else outer_size,
+            outer_stride=payload.stride() if outer_stride is None else outer_stride,
+            dtype=payload.dtype,
+            device=payload.device,
+        )
+
+    def __init__(
+        self,
+        payload: torch.Tensor,
+        positional_handle: _OpaqueHandle,
+        tag: object = "tag",
+        outer_size: Sequence[int | torch.SymInt] | None = None,
+        outer_stride: Sequence[int | torch.SymInt] | None = None,
+        *,
+        keyword_handle: _OpaqueHandle,
+        note: object = "note",
+        **kwargs: Any,
+    ) -> None:
+        """Store the tensor, opaque, and metadata fields."""
+        self.payload = payload
+        self.positional_handle = positional_handle
+        self.tag = tag
+        self.keyword_handle = keyword_handle
+        self.note = note
+
+
+def _make_opaque_inner_wrapper() -> tuple[_OpaqueInnerWrapper, torch.Tensor, _OpaqueHandle, _OpaqueHandle]:
+    """Build a wrapper containing tensor and opaque inner fields."""
+    payload = torch.arange(4, dtype=torch.float32)
+    positional_handle = _OpaqueHandle(1)
+    keyword_handle = _OpaqueHandle(2)
+    wrapper = _OpaqueInnerWrapper(
+        payload,
+        positional_handle,
+        "tag",
+        keyword_handle=keyword_handle,
+        note="note",
+    )
+    return wrapper, payload, positional_handle, keyword_handle
+
+
+def test_custom_opaque_inner_tensors_are_exposed_by_reference() -> None:
+    """Test that accessors expose tensor and opaque inner fields by reference."""
+    wrapper, payload, positional_handle, keyword_handle = _make_opaque_inner_wrapper()
+
+    inner_tensors = list(wrapper.inner_tensors)
+    assert len(inner_tensors) == 3
+    assert inner_tensors[0] is payload
+    assert inner_tensors[1] is positional_handle
+    assert inner_tensors[2] is keyword_handle
+
+    positional_inner_tensors = list(wrapper.positional_inner_tensors)
+    assert len(positional_inner_tensors) == 2
+    assert positional_inner_tensors[0] is payload
+    assert positional_inner_tensors[1] is positional_handle
+
+    keyword_inner_tensors = list(wrapper.keyword_inner_tensors)
+    assert len(keyword_inner_tensors) == 1
+    assert keyword_inner_tensors[0][0] == "keyword_handle"
+    assert keyword_inner_tensors[0][1] is keyword_handle
+
+    assert list(wrapper.inner_tensor_names()) == ["payload", "positional_handle", "keyword_handle"]
+
+
+def test_custom_opaque_inner_tensors_flatten_and_unflatten() -> None:
+    """Test that flatten and unflatten carry opaque inner fields unchanged."""
+    wrapper, payload, positional_handle, keyword_handle = _make_opaque_inner_wrapper()
+
+    inner_tensor_names, metadata = wrapper.__tensor_flatten__()
+    assert inner_tensor_names == ("payload", "positional_handle", "keyword_handle")
+    assert metadata == ("tag", "note")
+
+    inner_tensors = dict(zip(inner_tensor_names, wrapper.inner_tensors, strict=True))
+    rebuilt = type(wrapper).__tensor_unflatten__(
+        inner_tensors,
+        metadata,
+        wrapper.size(),
+        wrapper.stride(),
+    )
+
+    assert type(rebuilt) is _OpaqueInnerWrapper
+    assert rebuilt.payload is payload
+    assert rebuilt.positional_handle is positional_handle
+    assert rebuilt.keyword_handle is keyword_handle
+    assert rebuilt.tag == "tag"
+    assert rebuilt.note == "note"
+    assert rebuilt.size() == wrapper.size()
+    assert rebuilt.stride() == wrapper.stride()
 
 
 # ==============================================================================
