@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 CaoSY
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Batched linear layers."""
+"""Linear layer implementations."""
 
 import math
 from typing import ClassVar, Self
