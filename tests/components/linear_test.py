@@ -67,6 +67,12 @@ def test_reset_parameters_initializes_within_linear_bounds() -> None:
     assert module.bias.abs().max().item() <= bound
 
 
+def test_reset_parameters_rejects_zero_in_features() -> None:
+    """Test that reset_parameters rejects an invalid in_features value."""
+    with pytest.raises(ValueError, match="in_features must be > 0"):
+        BatchedLinear(2, 0, 4)
+
+
 # ------------------------------------------------------------------------------
 # forward
 # ------------------------------------------------------------------------------

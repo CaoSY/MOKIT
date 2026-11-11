@@ -118,13 +118,13 @@ class BatchedLinear(torch.nn.Module):
 
         The weight initialization matches ``torch.nn.Linear`` for each batch element.
         """
-        # Setting a=sqrt(5) in kaiming_uniform is the same as initializing with
-        # uniform(-1/sqrt(in_features), 1/sqrt(in_features)). For details, see
-        # https://github.com/pytorch/pytorch/issues/57109
-        init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        if self.in_features <= 0:
+            raise ValueError(f"in_features must be > 0, but got (in_features={self.in_features})")
+
+        bound = 1 / math.sqrt(self.in_features)
+        init.uniform_(self.weight, -bound, bound)
+
         if self.bias is not None:
-            fan_in, _ = init._calculate_fan_in_and_fan_out(self.weight)
-            bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
             init.uniform_(self.bias, -bound, bound)
 
     def forward(self: Self, input: torch.Tensor) -> torch.Tensor:
