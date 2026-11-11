@@ -19,9 +19,9 @@ class BatchedLinear(torch.nn.Module):
     :math:`b`. The weight and bias are independent for each batch element.
 
     Args:
-        batches: Number of independent weight matrices.
-        in_features: Size of each input sample.
-        out_features: Size of each output sample.
+        batches: Number of independent weight matrices, must be > 0.
+        in_features: Size of each input sample, must be > 0.
+        out_features: Size of each output sample, must be > 0.
         bias: If set to ``False``, the layer will not learn an additive bias.
             Default: ``True``
         device: The device of the parameters. Default: ``None``
@@ -92,9 +92,9 @@ class BatchedLinear(torch.nn.Module):
         Initialize the batched linear layer.
 
         Args:
-            batches: Number of independent weight matrices.
-            in_features: Size of each input sample.
-            out_features: Size of each output sample.
+            batches: Number of independent weight matrices, must be > 0.
+            in_features: Size of each input sample, must be > 0.
+            out_features: Size of each output sample, must be > 0.
             bias: If ``False``, the layer will not learn an additive bias.
             device: The device of the parameters.
             dtype: The dtype of the parameters.
@@ -117,6 +117,10 @@ class BatchedLinear(torch.nn.Module):
         Reset parameters based on their initialization used in ``__init__``.
 
         The weight initialization matches ``torch.nn.Linear`` for each batch element.
+
+        Raises:
+            ValueError: If ``in_features`` is not positive.
+
         """
         if self.in_features <= 0:
             raise ValueError(f"in_features must be > 0, but got (in_features={self.in_features})")
