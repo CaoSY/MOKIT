@@ -455,6 +455,28 @@ def test_apply_fn_by_id_rejects_mismatched_dest_grouping() -> None:
         )
 
 
+def test_apply_fn_by_id_rejects_dest_group_count_mismatch() -> None:
+    """Test that destination group count must match the source group count."""
+    first = object()
+    second = object()
+    third = object()
+    dest_first = object()
+    dest_second = object()
+    dest_third = object()
+
+    def transform(source: object, *, dest: object) -> tuple[object, object]:
+        """Return the paired representatives."""
+        return source, dest
+
+    # Extra destination group; the common prefix matches.
+    with pytest.raises(ValueError, match="grouping differ"):
+        apply_fn_by_id([first, second], transform, dest=[dest_first, dest_second, dest_third])
+
+    # Missing destination group; the common prefix matches.
+    with pytest.raises(ValueError, match="grouping differ"):
+        apply_fn_by_id([first, second, third], transform, dest=[dest_first, dest_second])
+
+
 def test_apply_fn_by_id_handles_empty_inputs() -> None:
     """Test that empty source and destination sequences produce no output."""
     calls: list[object] = []

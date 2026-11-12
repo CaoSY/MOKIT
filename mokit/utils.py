@@ -171,22 +171,24 @@ def apply_fn_by_id[SrcType, SrcIDType: Hashable, DestType, DestIDType: Hashable,
     """
     src_groups = group_by_id(src, idfunc=src_idfunc)
 
+    output: list[ResultType | None]
+
     if dest is None:
-        unique_dest = None
+        output = [None] * len(src)
+        for group in src_groups.values():
+            result = func(src[group[0]], *args, **kwargs)
+            for index in group:
+                output[index] = result
     else:
         dest_groups = group_by_id(dest, idfunc=dest_idfunc)
         if tuple(src_groups.values()) != tuple(dest_groups.values()):
             raise ValueError("src and dest grouping differ")
-        unique_dest = (dest[group[0]] for group in dest_groups.values())
 
-    unique_src = (src[group[0]] for group in src_groups.values())
-
-    unique_output = apply_fn(unique_src, func, *args, dest=unique_dest, **kwargs)
-
-    output: list[ResultType | None] = [None] * len(src)
-    for value, group in zip(unique_output, src_groups.values(), strict=True):
-        for index in group:
-            output[index] = value
+        output = [None] * len(src)
+        for group in src_groups.values():
+            result = func(src[group[0]], *args, dest=dest[group[0]], **kwargs)
+            for index in group:
+                output[index] = result
 
     return cast(list[ResultType], output)
 
