@@ -118,70 +118,6 @@ class TorchDispatchImpl(
 
 
 @overload
-def _call_handler_from_table(
-    owner_cls: type[MokitWrapperTensorBase],
-    table_name: Literal["_TORCH_FN_TABLE"],
-    cls: type[MokitWrapperTensorBase],
-    func: Callable[..., Any],
-    types: tuple[type[Any], ...],
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any] | None,
-) -> tuple[bool, Any]: ...
-
-
-@overload
-def _call_handler_from_table(
-    owner_cls: type[MokitWrapperTensorBase],
-    table_name: Literal["_ATEN_OP_TABLE"],
-    cls: type[MokitWrapperTensorBase],
-    func: OpOverload,
-    types: tuple[type[Any], ...],
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any] | None,
-) -> tuple[bool, Any]: ...
-
-
-def _call_handler_from_table(
-    owner_cls: type[MokitWrapperTensorBase],
-    table_name: Literal["_TORCH_FN_TABLE", "_ATEN_OP_TABLE"],
-    cls: type[MokitWrapperTensorBase],
-    func: Callable[..., Any] | OpOverload,
-    types: tuple[type[Any], ...],
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any] | None,
-) -> tuple[bool, Any]:
-    """
-    Call a handler for ``func`` from ``owner_cls``'s handler table.
-
-    The table is read from ``owner_cls.__dict__``; the exact key is tried first, then the
-    ``None`` wildcard.
-
-    Args:
-        owner_cls: Class whose table is checked.
-        table_name: Name of the table attribute.
-        cls: Runtime dispatch class passed to the handler.
-        func: Dispatched function or operator.
-        types: Participating argument types.
-        args: Positional arguments.
-        kwargs: Keyword arguments.
-
-    Returns:
-        A tuple of whether a handler was found and the handler result.
-
-    """
-    table = owner_cls.__dict__[table_name]
-
-    handler = table.get(func)
-    if handler is None:
-        handler = table.get(None)
-
-    if handler is None:
-        return False, None
-    else:
-        return True, handler(cls, func, types, args, kwargs)
-
-
-@overload
 def _register_handlers(
     cls: type[MokitWrapperTensorBase],
     table_name: Literal["_TORCH_FN_TABLE"],
@@ -300,9 +236,13 @@ def _make_subclass_torch_function(
             The handler result, or the result after delegating to the parent dispatcher.
 
         """
-        found, result = _call_handler_from_table(owner_cls, "_TORCH_FN_TABLE", cls, func, types, args, kwargs)
-        if found:
-            return result
+        # The generated dispatcher is installed only on classes that own their table.
+        table = owner_cls._TORCH_FN_TABLE
+        handler = table.get(func)
+        if handler is None:
+            handler = table.get(None)
+        if handler is not None:
+            return handler(cls, func, types, args, kwargs)
 
         parent = super(owner_cls, cls)  # pyrefly: ignore[invalid-argument]
         return parent.__torch_function__(func, types, args, kwargs)
@@ -350,9 +290,13 @@ def _make_subclass_torch_dispatch(
             The handler result after schema-declared aliasing correction.
 
         """
-        found, result = _call_handler_from_table(owner_cls, "_ATEN_OP_TABLE", cls, func, types, args, kwargs)
-        if found:
-            return return_and_correct_aliasing(func, args, kwargs, result)
+        # The generated dispatcher is installed only on classes that own their table.
+        table = owner_cls._ATEN_OP_TABLE
+        handler = table.get(func)
+        if handler is None:
+            handler = table.get(None)
+        if handler is not None:
+            return return_and_correct_aliasing(func, args, kwargs, handler(cls, func, types, args, kwargs))
 
         parent = super(owner_cls, cls)  # pyrefly: ignore[invalid-argument]
         return parent.__torch_dispatch__(func, types, args, kwargs)
@@ -1025,11 +969,12 @@ class MokitWrapperTensorBase(MokitTensorBase):
             subclass of every participating type, or the default function result.
 
         """
-        found, result = _call_handler_from_table(
-            MokitWrapperTensorBase, "_TORCH_FN_TABLE", cls, func, types, args, kwargs
-        )
-        if found:
-            return result
+        table = MokitWrapperTensorBase._TORCH_FN_TABLE
+        handler = table.get(func)
+        if handler is None:
+            handler = table.get(None)
+        if handler is not None:
+            return handler(cls, func, types, args, kwargs)
 
         if not all(issubclass(cls, t) for t in types):
             return NotImplemented
@@ -1147,11 +1092,12 @@ class MokitWrapperTensorBase(MokitTensorBase):
             NotImplementedError: If no handler is registered for the operator.
 
         """
-        found, result = _call_handler_from_table(
-            MokitWrapperTensorBase, "_ATEN_OP_TABLE", cls, func, types, args, kwargs
-        )
-        if found:
-            return return_and_correct_aliasing(func, args, kwargs, result)
+        table = MokitWrapperTensorBase._ATEN_OP_TABLE
+        handler = table.get(func)
+        if handler is None:
+            handler = table.get(None)
+        if handler is not None:
+            return return_and_correct_aliasing(func, args, kwargs, handler(cls, func, types, args, kwargs))
 
         arg_types = tuple(type(arg) for arg in args)
         kwarg_types = {param: type(arg) for param, arg in kwargs.items()} if kwargs is not None else None
