@@ -391,44 +391,44 @@ class MokitWrapperTensorBase(MokitTensorBase):
         def __repr__(self, *, tensor_contents: str | None = None) -> str: ...
 
         @classmethod
-        def inner_tensor_names(cls: type[Self]) -> Iterator[str]: ...
+        def inner_tensor_names(cls: type[Self]) -> tuple[str, ...]: ...
 
         @classmethod
-        def metadata_names(cls: type[Self]) -> Iterator[str]: ...
+        def metadata_names(cls: type[Self]) -> tuple[str, ...]: ...
 
         @property
-        def inner_tensors(self: Self) -> Iterator[InnerTensorType]: ...
+        def inner_tensors(self: Self) -> list[InnerTensorType]: ...
 
         @property
-        def positional_inner_tensors(self: Self) -> Iterator[InnerTensorType]: ...
+        def positional_inner_tensors(self: Self) -> list[InnerTensorType]: ...
 
         @property
-        def keyword_inner_tensors(self: Self) -> Iterator[tuple[str, InnerTensorType]]: ...
+        def keyword_inner_tensors(self: Self) -> dict[str, InnerTensorType]: ...
 
         @property
-        def metadata(self: Self) -> Iterator[Any]: ...
+        def metadata(self: Self) -> list[Any]: ...
 
         @property
-        def positional_metadata(self: Self) -> Iterator[Any]: ...
+        def positional_metadata(self: Self) -> list[Any]: ...
 
         @property
-        def keyword_metadata(self: Self) -> Iterator[tuple[str, Any]]: ...
+        def keyword_metadata(self: Self) -> dict[str, Any]: ...
 
 
     For each kind, the canonical flatten order is the positional names followed by the
-    keyword names: ``inner_tensor_names()`` chains ``positional_inner_tensor_names`` and
-    ``keyword_inner_tensor_names``, while ``metadata_names()`` does the same for metadata.
-    The separate ``_FLATTEN_ATTR_NAMES`` attribute does not affect flattening; it fixes the
-    order in which the four tuples are validated and printed by ``__repr__``.
+    keyword names: ``inner_tensor_names()`` concatenates ``positional_inner_tensor_names``
+    and ``keyword_inner_tensor_names``, while ``metadata_names()`` does the same for
+    metadata. The separate ``_FLATTEN_ATTR_NAMES`` attribute does not affect flattening; it
+    fixes the order in which the four tuples are validated and printed by ``__repr__``.
 
-    The accessors listed above return a fresh iterator on every access and yield values by
-    reference; ``__repr__`` consumes these values and returns a string. The class tuple is
-    read when the accessor creates the iterator; each instance field is read with
-    ``getattr`` as the iterator advances. Reassigning an instance field before its slot is
-    consumed changes the yielded value; rebinding a class tuple after the iterator is created
-    does not. ``_split_inner_tensor_values`` is a private helper for handlers: given processed
-    values in canonical order, it returns the positional values and an iterator of
-    (name, value) pairs for the keyword values.
+    The accessors listed above return a fresh materialized container on every access and
+    contain values by reference; ``__repr__`` consumes these values and returns a string. The
+    class tuple is read when the accessor is called; each instance field is read with
+    ``getattr`` while the container is built. Reassigning an instance field or rebinding a
+    class tuple after the accessor returns does not change the returned container.
+    ``_split_inner_tensor_values`` is a private helper for handlers: given processed values
+    in canonical order, it returns the positional values and a mapping of the keyword
+    values.
 
 
     **Constructor**
@@ -511,7 +511,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
     and metadata protocol introduced above.
 
     ``__tensor_flatten__`` returns the inner tensor names in ``inner_tensor_names()`` order and a flat
-    tuple of metadata values in ``metadata_names()`` order. PyTorch treats the metadata as opaque; the
+    list of metadata values in ``metadata_names()`` order. PyTorch treats the metadata as opaque; the
     flat representation is private to the flatten/unflatten pair and may change as long as the pair
     stays consistent.
 
@@ -758,9 +758,9 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         assert isinstance(y, ScaledTensor) and y.scale == 0.5
         assert isinstance(z, ScaledTensor) and torch.equal(z.payload, -x.payload)
-        assert x.__tensor_flatten__() == (("payload",), (0.5,))
+        assert x.__tensor_flatten__() == (("payload",), [0.5])
         assert list(x.inner_tensor_names()) == ["payload"]
-        assert list(x.keyword_metadata) == [("scale", 0.5)]
+        assert x.keyword_metadata == {"scale": 0.5}
 
     """
 
@@ -931,7 +931,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         return f"{type(self).__name__}({', '.join(fields)})"
 
-    def __tensor_flatten__(self) -> tuple[Sequence[str], tuple[Any, ...]]:
+    def __tensor_flatten__(self) -> tuple[Sequence[str], list[Any]]:
         """
         Flatten the wrapper into inner tensor names and metadata.
 
@@ -941,7 +941,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         """
         cls = type(self)
-        return tuple(cls.inner_tensor_names()), tuple(self.metadata)
+        return cls.inner_tensor_names(), self.metadata
 
     @classmethod
     def __tensor_unflatten__(
@@ -1218,100 +1218,98 @@ class MokitWrapperTensorBase(MokitTensorBase):
         return decorator
 
     @classmethod
-    def inner_tensor_names(cls: type[Self]) -> Iterator[str]:
+    def inner_tensor_names(cls: type[Self]) -> tuple[str, ...]:
         """
-        Return an iterator over the inner tensor field names in canonical flatten order.
+        Return the inner tensor field names in canonical flatten order.
 
         The order is ``positional_inner_tensor_names`` followed by ``keyword_inner_tensor_names``.
         The class attributes are read when this method is called.
 
         Returns:
-            An iterator over the flattened inner tensor field names.
+            The flattened inner tensor field names.
 
         """
-        return itertools.chain(cls.positional_inner_tensor_names, cls.keyword_inner_tensor_names)
+        return cls.positional_inner_tensor_names + cls.keyword_inner_tensor_names
 
     @classmethod
-    def metadata_names(cls: type[Self]) -> Iterator[str]:
+    def metadata_names(cls: type[Self]) -> tuple[str, ...]:
         """
-        Return an iterator over the metadata field names in canonical flatten order.
+        Return the metadata field names in canonical flatten order.
 
         The order is ``positional_metadata_names`` followed by ``keyword_metadata_names``.
         The class attributes are read when this method is called.
 
         Returns:
-            An iterator over the flattened metadata field names.
+            The flattened metadata field names.
 
         """
-        return itertools.chain(cls.positional_metadata_names, cls.keyword_metadata_names)
+        return cls.positional_metadata_names + cls.keyword_metadata_names
 
     @property
-    def inner_tensors(self: Self) -> Iterator[InnerTensorType]:
+    def inner_tensors(self: Self) -> list[InnerTensorType]:
         """
-        Return an iterator over the declared inner tensor values.
+        Return the declared inner tensor values.
 
         Returns:
-            An iterator over the declared inner tensor values in canonical flatten order, by
-            reference.
+            The declared inner tensor values in canonical flatten order, by reference.
 
         """
-        return (getattr(self, name) for name in type(self).inner_tensor_names())
+        return [getattr(self, name) for name in type(self).inner_tensor_names()]
 
     @property
-    def positional_inner_tensors(self: Self) -> Iterator[InnerTensorType]:
+    def positional_inner_tensors(self: Self) -> list[InnerTensorType]:
         """
-        Return an iterator over positional inner tensor values in declaration order.
+        Return positional inner tensor values in declaration order.
 
         Returns:
-            An iterator over the positional inner tensor values by reference.
+            The positional inner tensor values by reference.
 
         """
-        return (getattr(self, name) for name in type(self).positional_inner_tensor_names)
+        return [getattr(self, name) for name in type(self).positional_inner_tensor_names]
 
     @property
-    def keyword_inner_tensors(self: Self) -> Iterator[tuple[str, InnerTensorType]]:
+    def keyword_inner_tensors(self: Self) -> dict[str, InnerTensorType]:
         """
-        Return an iterator over keyword inner tensor field names and values.
+        Return keyword inner tensor field names and values.
 
         Returns:
-            An iterator over ``(name, value)`` pairs, with values by reference.
+            A mapping from field names to values, with values by reference.
 
         """
-        return ((name, getattr(self, name)) for name in type(self).keyword_inner_tensor_names)
+        return {name: getattr(self, name) for name in type(self).keyword_inner_tensor_names}
 
     @property
-    def metadata(self: Self) -> Iterator[Any]:
+    def metadata(self: Self) -> list[Any]:
         """
-        Return an iterator over the declared metadata values.
+        Return the declared metadata values.
 
         Returns:
-            An iterator over the declared metadata values in canonical flatten order, by
-            reference.
+            The declared metadata values in canonical flatten order, by reference.
 
         """
-        return (getattr(self, name) for name in type(self).metadata_names())
+        return [getattr(self, name) for name in type(self).metadata_names()]
 
     @property
-    def positional_metadata(self: Self) -> Iterator[Any]:
+    def positional_metadata(self: Self) -> list[Any]:
         """
-        Return an iterator over positional metadata values in declaration order.
+        Return positional metadata values in declaration order.
 
         Returns:
-            An iterator over the positional metadata values by reference.
+            The positional metadata values by reference.
 
         """
-        return (getattr(self, name) for name in type(self).positional_metadata_names)
+        return [getattr(self, name) for name in type(self).positional_metadata_names]
 
     @property
-    def keyword_metadata(self: Self) -> Iterator[tuple[str, Any]]:
+    def keyword_metadata(self: Self) -> dict[str, Any]:
         """
-        Return an iterator over keyword metadata field names and values.
+        Return keyword metadata field names and values.
 
         Returns:
-            An iterator over ``(name, value)`` pairs, with values by reference.
+            A mapping from field names to values, with values by reference.
 
         """
-        return ((name, getattr(self, name)) for name in type(self).keyword_metadata_names)
+        return {name: getattr(self, name) for name in type(self).keyword_metadata_names}
 
     def has_same_attributes(
         self: Self,
@@ -1427,28 +1425,11 @@ class MokitWrapperTensorBase(MokitTensorBase):
         """
         return torch.Tensor._make_wrapper_subclass(cls, *args, **kwargs)
 
-    @overload
-    @classmethod
-    def _split_inner_tensor_values(
-        cls: type[Self],
-        values: Iterator[InnerTensorType],
-    ) -> tuple[Sequence[InnerTensorType], Iterator[tuple[str, InnerTensorType]]]: ...
-
-    @overload
-    @classmethod
-    def _split_inner_tensor_values(
-        cls: type[Self],
-        values: Sequence[InnerTensorType],
-    ) -> tuple[Iterator[InnerTensorType], Iterator[tuple[str, InnerTensorType]]]: ...
-
     @classmethod
     def _split_inner_tensor_values(
         cls: type[Self],
         values: Iterator[InnerTensorType] | Sequence[InnerTensorType],
-    ) -> tuple[
-        Sequence[InnerTensorType] | Iterator[InnerTensorType],
-        Iterator[tuple[str, InnerTensorType]],
-    ]:
+    ) -> tuple[Sequence[InnerTensorType], dict[str, InnerTensorType]]:
         """
         Split processed inner tensor values into positional and keyword groups.
 
@@ -1456,10 +1437,9 @@ class MokitWrapperTensorBase(MokitTensorBase):
             values: The processed inner tensor values in ``inner_tensor_names()`` order.
 
         Returns:
-            The positional inner tensor values and an iterator of ``(name, value)`` pairs
-            for the keyword inner tensor values in ``keyword_inner_tensor_names`` order.
-            A ``Sequence`` input yields a lazy positional iterator; an iterator input
-            yields a positional tuple. The keyword iterator is always one-shot.
+            The positional inner tensor values and a mapping from keyword names to values.
+            A ``Sequence`` input yields a positional slice of the same concrete type; an
+            iterator input yields a positional tuple.
 
         Raises:
             ValueError: If ``values`` does not yield one value per declared inner
@@ -1473,9 +1453,10 @@ class MokitWrapperTensorBase(MokitTensorBase):
             if len(values) != expected_count:
                 raise ValueError(f"expected {expected_count} inner tensor values, got {len(values)}")
 
-            positional_inner_tensors = itertools.islice(values, positional_count)
-            remaining_iterator = itertools.islice(values, positional_count, None)
-            keyword_inner_tensors = zip(cls.keyword_inner_tensor_names, remaining_iterator, strict=True)
+            positional_inner_tensors = values[:positional_count]
+            keyword_inner_tensors = {
+                name: values[positional_count + index] for index, name in enumerate(cls.keyword_inner_tensor_names)
+            }
 
         else:
             positional_inner_tensors = tuple(itertools.islice(values, positional_count))
@@ -1485,7 +1466,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
                 )
 
             remaining_iterator = values
-            keyword_inner_tensors = zip(cls.keyword_inner_tensor_names, remaining_iterator, strict=True)
+            keyword_inner_tensors = dict(zip(cls.keyword_inner_tensor_names, remaining_iterator, strict=True))
 
         return positional_inner_tensors, keyword_inner_tensors
 
@@ -1606,7 +1587,7 @@ def _[WrapperType: MokitWrapperTensorBase](
     )
 
     cloned_inner_tensor_values = apply_fn_by_id(
-        tuple(self.inner_tensors),
+        self.inner_tensors,
         func,
         memory_format=memory_format,
     )
@@ -1620,8 +1601,8 @@ def _[WrapperType: MokitWrapperTensorBase](
         *self.positional_metadata,
         outer_size=outer_tensor.size(),
         outer_stride=outer_tensor.stride(),
-        **dict(keyword_inner_values),
-        **dict(self.keyword_metadata),
+        **keyword_inner_values,
+        **self.keyword_metadata,
     )
 
     return outer_tensor
@@ -1683,9 +1664,9 @@ def _[WrapperType: MokitWrapperTensorBase](
     self.has_same_attributes(out, strict=True, raise_on_mismatch=True)
 
     apply_fn_by_id(
-        tuple(self.inner_tensors),
+        self.inner_tensors,
         lambda source, *, dest: func(source, memory_format=memory_format, out=dest),
-        dest=tuple(out.inner_tensors),
+        dest=out.inner_tensors,
     )
 
     return out
@@ -1736,7 +1717,7 @@ def _[WrapperType: MokitWrapperTensorBase](
     aliased = self._apply_fn_to_outer_tensor(func)
 
     aliased_inner_values = apply_fn_by_id(
-        tuple(self.inner_tensors),
+        self.inner_tensors,
         func,
     )
     positional_inner_values, keyword_inner_values = cls._split_inner_tensor_values(aliased_inner_values)
@@ -1747,8 +1728,8 @@ def _[WrapperType: MokitWrapperTensorBase](
         *self.positional_metadata,
         outer_size=aliased.size(),
         outer_stride=aliased.stride(),
-        **dict(keyword_inner_values),
-        **dict(self.keyword_metadata),
+        **keyword_inner_values,
+        **self.keyword_metadata,
     )
 
     return aliased
@@ -1799,9 +1780,9 @@ def _[WrapperType: MokitWrapperTensorBase](
     self.has_same_attributes(src, strict=True, raise_on_mismatch=True)
 
     apply_fn_by_id(
-        tuple(src.inner_tensors),
+        src.inner_tensors,
         lambda source, *, dest: func(dest, source, non_blocking=non_blocking),
-        dest=tuple(self.inner_tensors),
+        dest=self.inner_tensors,
     )
 
     return self
@@ -1888,7 +1869,7 @@ def _[WrapperType: MokitWrapperTensorBase](
         )
 
     new_inner_tensor_values = apply_fn_by_id(
-        tuple(self.inner_tensors),
+        self.inner_tensors,
         lambda src: func(
             src,
             device=device,
@@ -1916,8 +1897,8 @@ def _[WrapperType: MokitWrapperTensorBase](
         *self.positional_metadata,
         outer_size=outer_tensor.size(),
         outer_stride=outer_tensor.stride(),
-        **dict(keyword_inner_values),
-        **dict(self.keyword_metadata),
+        **keyword_inner_values,
+        **self.keyword_metadata,
     )
 
     return outer_tensor
