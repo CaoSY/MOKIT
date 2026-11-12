@@ -393,8 +393,8 @@ class MokitWrapperTensorBase(MokitTensorBase):
     ``getattr`` as the iterator advances. Reassigning an instance field before its slot is
     consumed changes the yielded value; rebinding a class tuple after the iterator is created
     does not. ``_split_inner_tensor_values`` is a private helper for handlers: given processed
-    values in canonical order, it returns the positional values and a name-keyed mapping
-    of the keyword values.
+    values in canonical order, it returns the positional values and an iterator of
+    (name, value) pairs for the keyword values.
 
 
     **Constructor**
@@ -1406,11 +1406,28 @@ class MokitWrapperTensorBase(MokitTensorBase):
         """
         return torch.Tensor._make_wrapper_subclass(cls, *args, **kwargs)
 
+    @overload
     @classmethod
     def _split_inner_tensor_values(
         cls: type[Self],
-        values: Iterator[Any] | Sequence[Any],
-    ) -> tuple[Sequence[Any], Mapping[str, Any]]:
+        values: Iterator[torch.Tensor | CustomClassBase],
+    ) -> tuple[Sequence[torch.Tensor | CustomClassBase], Iterator[tuple[str, torch.Tensor | CustomClassBase]]]: ...
+
+    @overload
+    @classmethod
+    def _split_inner_tensor_values(
+        cls: type[Self],
+        values: Sequence[torch.Tensor | CustomClassBase],
+    ) -> tuple[Iterator[torch.Tensor | CustomClassBase], Iterator[tuple[str, torch.Tensor | CustomClassBase]]]: ...
+
+    @classmethod
+    def _split_inner_tensor_values(
+        cls: type[Self],
+        values: Iterator[torch.Tensor | CustomClassBase] | Sequence[torch.Tensor | CustomClassBase],
+    ) -> tuple[
+        Sequence[torch.Tensor | CustomClassBase] | Iterator[torch.Tensor | CustomClassBase],
+        Iterator[tuple[str, torch.Tensor | CustomClassBase]],
+    ]:
         """
         Split processed inner tensor values into positional and keyword groups.
 
@@ -1418,8 +1435,10 @@ class MokitWrapperTensorBase(MokitTensorBase):
             values: The processed inner tensor values in ``inner_tensor_names()`` order.
 
         Returns:
-            The positional inner tensor values and the keyword inner tensor values keyed
-            by field name.
+            The positional inner tensor values and an iterator of ``(name, value)`` pairs
+            for the keyword inner tensor values in ``keyword_inner_tensor_names`` order.
+            A ``Sequence`` input yields a lazy positional iterator; an iterator input
+            yields a positional tuple. The keyword iterator is always one-shot.
 
         Raises:
             ValueError: If ``values`` does not yield one value per declared inner
@@ -1429,18 +1448,23 @@ class MokitWrapperTensorBase(MokitTensorBase):
         positional_count = len(cls.positional_inner_tensor_names)
 
         if isinstance(values, Sequence):
-            positional_inner_tensors = values[:positional_count]
+            expected_count = positional_count + len(cls.keyword_inner_tensor_names)
+            if len(values) != expected_count:
+                raise ValueError(f"expected {expected_count} inner tensor values, got {len(values)}")
+
+            positional_inner_tensors = itertools.islice(values, positional_count)
             remaining_iterator = itertools.islice(values, positional_count, None)
+            keyword_inner_tensors = zip(cls.keyword_inner_tensor_names, remaining_iterator, strict=True)
+
         else:
             positional_inner_tensors = tuple(itertools.islice(values, positional_count))
+            if len(positional_inner_tensors) != positional_count:
+                raise ValueError(
+                    f"expected {positional_count} positional inner tensor values, got {len(positional_inner_tensors)}"
+                )
+
             remaining_iterator = values
-
-        if len(positional_inner_tensors) != positional_count:
-            raise ValueError(
-                f"expected {positional_count} positional inner tensor values, got {len(positional_inner_tensors)}"
-            )
-
-        keyword_inner_tensors = dict(zip(cls.keyword_inner_tensor_names, remaining_iterator, strict=True))
+            keyword_inner_tensors = zip(cls.keyword_inner_tensor_names, remaining_iterator, strict=True)
 
         return positional_inner_tensors, keyword_inner_tensors
 
@@ -1575,7 +1599,7 @@ def _[WrapperType: MokitWrapperTensorBase](
         *self.positional_metadata,
         outer_size=outer_tensor.size(),
         outer_stride=outer_tensor.stride(),
-        **keyword_inner_values,
+        **dict(keyword_inner_values),
         **dict(self.keyword_metadata),
     )
 
@@ -1702,7 +1726,7 @@ def _[WrapperType: MokitWrapperTensorBase](
         *self.positional_metadata,
         outer_size=aliased.size(),
         outer_stride=aliased.stride(),
-        **keyword_inner_values,
+        **dict(keyword_inner_values),
         **dict(self.keyword_metadata),
     )
 
@@ -1871,7 +1895,7 @@ def _[WrapperType: MokitWrapperTensorBase](
         *self.positional_metadata,
         outer_size=outer_tensor.size(),
         outer_stride=outer_tensor.stride(),
-        **keyword_inner_values,
+        **dict(keyword_inner_values),
         **dict(self.keyword_metadata),
     )
 

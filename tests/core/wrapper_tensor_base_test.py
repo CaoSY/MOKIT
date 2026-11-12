@@ -6,7 +6,7 @@
 import copy
 import pickle
 import warnings
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any, ClassVar, Self, cast
 
@@ -3880,18 +3880,19 @@ def test_apply_fn_to_outer_tensor_forwards_arguments() -> None:
 
 
 def test_split_inner_tensor_values_splits_positional_and_keyword_groups() -> None:
-    """Test that _split_inner_tensor_values returns positional values and a keyword mapping."""
+    """Test that _split_inner_tensor_values returns a positional iterator and keyword pairs."""
     payload = torch.tensor([1.0, 2.0])
     bias = torch.tensor([3.0, 4.0])
 
     positional, keyword = _Wrapper._split_inner_tensor_values((payload, bias))
 
-    assert isinstance(positional, tuple)
-    assert isinstance(keyword, dict)
-    assert len(positional) == 1
-    assert positional[0] is payload
-    assert tuple(keyword) == ("bias",)
-    assert keyword["bias"] is bias
+    assert isinstance(positional, Iterator)
+    positional_values = tuple(positional)
+    keyword_pairs = dict(keyword)
+    assert len(positional_values) == 1
+    assert positional_values[0] is payload
+    assert tuple(keyword_pairs) == ("bias",)
+    assert keyword_pairs["bias"] is bias
 
 
 def test_split_inner_tensor_values_accepts_iterator() -> None:
@@ -3901,16 +3902,20 @@ def test_split_inner_tensor_values_accepts_iterator() -> None:
 
     positional, keyword = _Wrapper._split_inner_tensor_values(iter((payload, bias)))
 
+    assert isinstance(positional, tuple)
     assert positional[0] is payload
-    assert keyword["bias"] is bias
+    keyword_pairs = dict(keyword)
+    assert tuple(keyword_pairs) == ("bias",)
+    assert keyword_pairs["bias"] is bias
 
 
 def test_split_inner_tensor_values_handles_empty_wrapper() -> None:
     """Test that _split_inner_tensor_values returns empty groups for a fieldless wrapper."""
     positional, keyword = _EmptyWrapper._split_inner_tensor_values(())
 
-    assert positional == ()
-    assert keyword == {}
+    assert isinstance(positional, Iterator)
+    assert tuple(positional) == ()
+    assert dict(keyword) == {}
 
 
 def test_split_inner_tensor_values_rejects_length_mismatch() -> None:
@@ -3918,14 +3923,17 @@ def test_split_inner_tensor_values_rejects_length_mismatch() -> None:
     payload = torch.tensor([1.0, 2.0])
     bias = torch.tensor([3.0, 4.0])
 
-    with pytest.raises(ValueError, match="positional inner tensor values"):
+    with pytest.raises(ValueError, match="expected 2 inner tensor values"):
         _AliasWrapper._split_inner_tensor_values((payload,))
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="expected 2 inner tensor values"):
         _Wrapper._split_inner_tensor_values((payload,))
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="expected 2 inner tensor values"):
         _Wrapper._split_inner_tensor_values((payload, bias, bias))
+
+    with pytest.raises(ValueError, match="positional inner tensor values"):
+        _AliasWrapper._split_inner_tensor_values(iter((payload,)))
 
 
 # ------------------------------------------------------------------------------
