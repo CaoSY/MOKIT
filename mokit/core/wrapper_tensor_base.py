@@ -17,6 +17,9 @@ from torch.utils._python_dispatch import return_and_correct_aliasing
 from mokit.core import MokitTensorBase
 from mokit.utils import apply_fn_by_id
 
+# An inner tensor value is a real tensor or a registered opaque custom class.
+type InnerTensorType = torch.Tensor | CustomClassBase
+
 
 class HandlerProtocol[
     ClsType: type[Any],
@@ -363,13 +366,13 @@ class MokitWrapperTensorBase(MokitTensorBase):
         def metadata_names(cls: type[Self]) -> Iterator[str]: ...
 
         @property
-        def inner_tensors(self: Self) -> Iterator[torch.Tensor | CustomClassBase]: ...
+        def inner_tensors(self: Self) -> Iterator[InnerTensorType]: ...
 
         @property
-        def positional_inner_tensors(self: Self) -> Iterator[torch.Tensor | CustomClassBase]: ...
+        def positional_inner_tensors(self: Self) -> Iterator[InnerTensorType]: ...
 
         @property
-        def keyword_inner_tensors(self: Self) -> Iterator[tuple[str, torch.Tensor | CustomClassBase]]: ...
+        def keyword_inner_tensors(self: Self) -> Iterator[tuple[str, InnerTensorType]]: ...
 
         @property
         def metadata(self: Self) -> Iterator[Any]: ...
@@ -912,7 +915,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
     @classmethod
     def __tensor_unflatten__(
         cls,
-        inner_tensors: Mapping[str, torch.Tensor | CustomClassBase],
+        inner_tensors: Mapping[str, InnerTensorType],
         metadata: Sequence[Any],
         outer_size: Sequence[int | torch.SymInt],
         outer_stride: Sequence[int | torch.SymInt],
@@ -1212,7 +1215,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
         return itertools.chain(cls.positional_metadata_names, cls.keyword_metadata_names)
 
     @property
-    def inner_tensors(self: Self) -> Iterator[torch.Tensor | CustomClassBase]:
+    def inner_tensors(self: Self) -> Iterator[InnerTensorType]:
         """
         Return an iterator over the declared inner tensor values.
 
@@ -1224,7 +1227,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
         return (getattr(self, name) for name in type(self).inner_tensor_names())
 
     @property
-    def positional_inner_tensors(self: Self) -> Iterator[torch.Tensor | CustomClassBase]:
+    def positional_inner_tensors(self: Self) -> Iterator[InnerTensorType]:
         """
         Return an iterator over positional inner tensor values in declaration order.
 
@@ -1235,7 +1238,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
         return (getattr(self, name) for name in type(self).positional_inner_tensor_names)
 
     @property
-    def keyword_inner_tensors(self: Self) -> Iterator[tuple[str, torch.Tensor | CustomClassBase]]:
+    def keyword_inner_tensors(self: Self) -> Iterator[tuple[str, InnerTensorType]]:
         """
         Return an iterator over keyword inner tensor field names and values.
 
@@ -1410,23 +1413,23 @@ class MokitWrapperTensorBase(MokitTensorBase):
     @classmethod
     def _split_inner_tensor_values(
         cls: type[Self],
-        values: Iterator[torch.Tensor | CustomClassBase],
-    ) -> tuple[Sequence[torch.Tensor | CustomClassBase], Iterator[tuple[str, torch.Tensor | CustomClassBase]]]: ...
+        values: Iterator[InnerTensorType],
+    ) -> tuple[Sequence[InnerTensorType], Iterator[tuple[str, InnerTensorType]]]: ...
 
     @overload
     @classmethod
     def _split_inner_tensor_values(
         cls: type[Self],
-        values: Sequence[torch.Tensor | CustomClassBase],
-    ) -> tuple[Iterator[torch.Tensor | CustomClassBase], Iterator[tuple[str, torch.Tensor | CustomClassBase]]]: ...
+        values: Sequence[InnerTensorType],
+    ) -> tuple[Iterator[InnerTensorType], Iterator[tuple[str, InnerTensorType]]]: ...
 
     @classmethod
     def _split_inner_tensor_values(
         cls: type[Self],
-        values: Iterator[torch.Tensor | CustomClassBase] | Sequence[torch.Tensor | CustomClassBase],
+        values: Iterator[InnerTensorType] | Sequence[InnerTensorType],
     ) -> tuple[
-        Sequence[torch.Tensor | CustomClassBase] | Iterator[torch.Tensor | CustomClassBase],
-        Iterator[tuple[str, torch.Tensor | CustomClassBase]],
+        Sequence[InnerTensorType] | Iterator[InnerTensorType],
+        Iterator[tuple[str, InnerTensorType]],
     ]:
         """
         Split processed inner tensor values into positional and keyword groups.
