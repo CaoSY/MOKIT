@@ -121,7 +121,7 @@ class TorchDispatchImpl(
 def _register_handlers(
     cls: type[MokitWrapperTensorBase],
     table_name: Literal["_TORCH_FN_TABLE"],
-    method_name: Literal["__torch_function__"],
+    dispatcher_name: Literal["__torch_function__"],
     keys: tuple[Callable[..., Any] | None, ...],
     func: Callable[..., Any],
     override: bool,
@@ -133,7 +133,7 @@ def _register_handlers(
 def _register_handlers(
     cls: type[MokitWrapperTensorBase],
     table_name: Literal["_ATEN_OP_TABLE"],
-    method_name: Literal["__torch_dispatch__"],
+    dispatcher_name: Literal["__torch_dispatch__"],
     keys: tuple[OpOverload | None, ...],
     func: Callable[..., Any],
     override: bool,
@@ -144,7 +144,7 @@ def _register_handlers(
 def _register_handlers(
     cls: type[MokitWrapperTensorBase],
     table_name: Literal["_TORCH_FN_TABLE", "_ATEN_OP_TABLE"],
-    method_name: Literal["__torch_function__", "__torch_dispatch__"],
+    dispatcher_name: Literal["__torch_function__", "__torch_dispatch__"],
     keys: tuple[Callable[..., Any] | OpOverload | None, ...],
     func: Callable[..., Any],
     override: bool,
@@ -156,14 +156,14 @@ def _register_handlers(
     """
     Register all handler keys for one decorator application.
 
-    Validation failures - a non-callable handler, inconsistent method/table state,
+    Validation failures - a non-callable handler, inconsistent dispatcher/table state,
     a non-dict table, or key conflicts - leave the class unchanged. Failures while
-    installing the generated method or writing the table are fatal.
+    installing the generated dispatcher or writing the table are fatal.
 
     Args:
         cls: Class receiving the handlers.
         table_name: Handler table attribute name.
-        method_name: Dispatch method attribute name.
+        dispatcher_name: Attribute name of the dispatcher.
         keys: Handler keys, including ``None`` for a wildcard.
         func: Handler callable.
         override: Whether to replace existing handlers.
@@ -177,11 +177,11 @@ def _register_handlers(
     if not callable(func):
         raise TypeError("handler must be callable")
 
-    has_method = method_name in cls.__dict__
+    has_dispatcher = dispatcher_name in cls.__dict__
     table = cls.__dict__.get(table_name)
 
-    if has_method and table is None:
-        raise KeyError(f"{cls.__name__} defines its own {method_name} but does not define its own {table_name}.")
+    if has_dispatcher and table is None:
+        raise KeyError(f"{cls.__name__} defines its own {dispatcher_name} but does not define its own {table_name}.")
 
     if table is not None:
         if type(table) is not dict:
@@ -191,8 +191,8 @@ def _register_handlers(
         if conflicts and not override:
             raise KeyError(f"Handlers already registered for {conflicts!r}.")
 
-    if not has_method:
-        setattr(cls, method_name, classmethod(make_method(cls)))
+    if not has_dispatcher:
+        setattr(cls, dispatcher_name, classmethod(make_method(cls)))
 
     entries = {key: func for key in keys}
     if table is None:
