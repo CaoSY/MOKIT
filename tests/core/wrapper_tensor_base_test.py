@@ -208,6 +208,37 @@ def test_new_forwards_shell_keywords() -> None:
     assert wrapper.requires_grad
 
 
+def test_new_forwards_only_supplied_outer_kwargs() -> None:
+    """Test that the default __new__ omits outer kwargs the caller did not supply."""
+    outer_kwargs: list[dict[str, Any]] = []
+
+    class _TrackingWrapper(_DefaultNewWrapper):
+        @classmethod
+        def _make_outer_tensor(cls, *args: Any, **kwargs: Any) -> Self:
+            outer_kwargs.append(dict(kwargs))
+            return super()._make_outer_tensor(*args, **kwargs)
+
+    inner = torch.arange(4, dtype=torch.float64)
+
+    _TrackingWrapper(inner, "tag", outer_size=(4,), outer_stride=(1,))
+
+    assert set(outer_kwargs[0]) == {"size", "strides"}
+
+    _TrackingWrapper(
+        inner,
+        "tag",
+        outer_size=(4,),
+        outer_stride=(1,),
+        dtype=torch.float64,
+        device=torch.device("meta"),
+    )
+
+    assert outer_kwargs[1]["dtype"] is torch.float64
+    assert outer_kwargs[1]["device"] == torch.device("meta")
+    assert "layout" not in outer_kwargs[1]
+    assert "requires_grad" not in outer_kwargs[1]
+
+
 def test_new_requires_outer_size() -> None:
     """Test that the default __new__ requires outer_size."""
     with pytest.raises(TypeError, match="outer_size"):

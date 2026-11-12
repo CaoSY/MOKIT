@@ -7,7 +7,7 @@ import functools
 import itertools
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from typing import Any, ClassVar, Literal, Protocol, Self, cast, overload
+from typing import Any, ClassVar, Final, Literal, Protocol, Self, cast, overload
 
 import torch
 from torch._custom_class_base import CustomClassBase
@@ -304,6 +304,22 @@ def _make_subclass_torch_dispatch(
     return __torch_dispatch__
 
 
+_MAKE_WRAPPER_SUBCLASS_KEYWORD_NAMES: Final[tuple[str, ...]] = (
+    "storage_offset",
+    "memory_format",
+    "dtype",
+    "layout",
+    "device",
+    "pin_memory",
+    "requires_grad",
+    "dispatch_sizes_strides_policy",
+    "dispatch_device",
+    "dispatch_layout",
+    "_extra_dispatch_keys",
+    "storage_size",
+)
+
+
 class MokitWrapperTensorBase(MokitTensorBase):
     """
     The base class for MOKIT wrapper tensor subclasses.
@@ -435,7 +451,9 @@ class MokitWrapperTensorBase(MokitTensorBase):
     keyword arguments of ``torch.Tensor._make_wrapper_subclass``: ``storage_offset``,
     ``memory_format``, ``dtype``, ``layout``, ``device``, ``pin_memory``, ``requires_grad``,
     ``dispatch_sizes_strides_policy``, ``dispatch_device``, ``dispatch_layout``,
-    ``_extra_dispatch_keys``, and ``storage_size``. Therefore,
+    ``_extra_dispatch_keys``, and ``storage_size``. Only recognized keys supplied by the
+    caller are forwarded to ``_make_outer_tensor``; omitted keys use the shell factory's
+    defaults. Therefore,
 
     1. A field whose value is passed under one of these keyword names is consumed by
        ``__new__`` as shell metadata. Declaring one of these names is acceptable only when
@@ -763,7 +781,9 @@ class MokitWrapperTensorBase(MokitTensorBase):
                 ``layout``, ``device``, ``pin_memory``, ``requires_grad``,
                 ``storage_offset``, ``memory_format``, ``storage_size``,
                 ``dispatch_sizes_strides_policy``, ``dispatch_device``,
-                ``dispatch_layout``, and ``_extra_dispatch_keys``.
+                ``dispatch_layout``, and ``_extra_dispatch_keys``. Only recognized keys
+                that are present are forwarded to ``_make_outer_tensor``; omitted keys
+                use the shell factory's defaults.
 
         Returns:
             The outer wrapper shell.
@@ -772,22 +792,8 @@ class MokitWrapperTensorBase(MokitTensorBase):
             TypeError: If the shell factory rejects the provided geometry or shell metadata.
 
         """
-        return cls._make_outer_tensor(
-            size=outer_size,
-            strides=outer_stride,
-            storage_offset=kwargs.get("storage_offset"),
-            memory_format=kwargs.get("memory_format"),
-            dtype=kwargs.get("dtype"),
-            layout=kwargs.get("layout", torch.strided),
-            device=kwargs.get("device"),
-            pin_memory=kwargs.get("pin_memory", False),
-            requires_grad=kwargs.get("requires_grad", False),
-            dispatch_sizes_strides_policy=kwargs.get("dispatch_sizes_strides_policy"),
-            dispatch_device=kwargs.get("dispatch_device", False),
-            dispatch_layout=kwargs.get("dispatch_layout", False),
-            _extra_dispatch_keys=kwargs.get("_extra_dispatch_keys"),
-            storage_size=kwargs.get("storage_size"),
-        )
+        outer_kwargs = {name: kwargs[name] for name in _MAKE_WRAPPER_SUBCLASS_KEYWORD_NAMES if name in kwargs}
+        return cls._make_outer_tensor(size=outer_size, strides=outer_stride, **outer_kwargs)
 
     @classmethod
     def __init_subclass__(cls, **kwargs: Any) -> None:
@@ -1382,8 +1388,10 @@ class MokitWrapperTensorBase(MokitTensorBase):
         Construct an outer wrapper shell.
 
         The default implementation forwards positional and keyword arguments to
-        ``torch.Tensor._make_wrapper_subclass``. Subclasses may override this method to
-        provide their own outer wrapper creation logic.
+        ``torch.Tensor._make_wrapper_subclass``. ``__new__`` forwards only the recognized
+        shell keywords that the caller supplied, so overrides must accept a subset of them
+        and preserve the shell factory's defaults for omitted keys. Subclasses may override
+        this method to provide their own outer wrapper creation logic.
 
         Args:
             *args: Positional arguments for the wrapper factory.
