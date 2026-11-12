@@ -323,6 +323,37 @@ _MAKE_WRAPPER_SUBCLASS_KEYWORD_NAMES: Final[tuple[str, ...]] = (
 )
 
 
+def _mismatch(
+    field: str,
+    self_value: object,
+    other_value: object,
+    *,
+    raise_on_mismatch: bool,
+    kind: str | None = None,
+) -> bool:
+    """
+    Raise or return False for a metadata or native-attribute mismatch.
+
+    Args:
+        field: Name of the mismatched attribute.
+        self_value: Value from the receiver.
+        other_value: Value from the other wrapper.
+        raise_on_mismatch: Whether to raise instead of returning False.
+        kind: Optional category label, such as ``"metadata"``.
+
+    Returns:
+        ``False`` when ``raise_on_mismatch`` is false.
+
+    Raises:
+        ValueError: If ``raise_on_mismatch`` is true.
+
+    """
+    if raise_on_mismatch:
+        label = f"{kind} {field!r}" if kind is not None else field
+        raise ValueError(f"{label} mismatch: self={self_value!r}, other={other_value!r}")
+    return False
+
+
 class MokitWrapperTensorBase(MokitTensorBase):
     """
     The base class for MOKIT wrapper tensor subclasses.
@@ -1310,32 +1341,19 @@ class MokitWrapperTensorBase(MokitTensorBase):
         if type(self) is not type(other):
             raise ValueError(f"type mismatch: self={type(self).__name__}, other={type(other).__name__}")
 
-        def mismatch(
-            field: str,
-            self_value: object,
-            other_value: object,
-            *,
-            kind: str | None = None,
-        ) -> bool:
-            """Raise or return False for the current mismatch."""
-            if raise_on_mismatch:
-                label = f"{kind} {field!r}" if kind is not None else field
-                raise ValueError(f"{label} mismatch: self={self_value!r}, other={other_value!r}")
-            return False
-
         if strict:
             for attr_name in ("dtype", "device", "layout", "shape"):
                 self_value = getattr(self, attr_name)
                 other_value = getattr(other, attr_name)
 
                 if self_value != other_value:
-                    return mismatch(attr_name, self_value, other_value)
+                    return _mismatch(attr_name, self_value, other_value, raise_on_mismatch=raise_on_mismatch)
 
             self_stride = self.stride()
             other_stride = other.stride()
 
             if self_stride != other_stride:
-                return mismatch("stride", self_stride, other_stride)
+                return _mismatch("stride", self_stride, other_stride, raise_on_mismatch=raise_on_mismatch)
 
         for name in type(self).metadata_names():
             self_value = getattr(self, name)
@@ -1350,7 +1368,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
                 raise ValueError(f"metadata {name!r} is not equality-comparable") from exc
 
             if not equal:
-                return mismatch(name, self_value, other_value, kind="metadata")
+                return _mismatch(name, self_value, other_value, raise_on_mismatch=raise_on_mismatch, kind="metadata")
 
         return True
 
