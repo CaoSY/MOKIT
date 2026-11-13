@@ -3882,7 +3882,7 @@ def test_apply_fn_to_outer_tensor_forwards_arguments() -> None:
 
 
 def test_split_inner_tensor_values_splits_positional_and_keyword_groups() -> None:
-    """Test that _split_inner_tensor_values returns positional values and a keyword mapping."""
+    """Test that _split_inner_tensor_values returns positional values and a keyword dict."""
     payload = torch.tensor([1.0, 2.0])
     bias = torch.tensor([3.0, 4.0])
 

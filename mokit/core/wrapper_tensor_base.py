@@ -427,8 +427,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
     ``getattr`` while the container is built. Reassigning an instance field or rebinding a
     class tuple after the accessor returns does not change the returned container.
     ``_split_inner_tensor_values`` is a private helper for handlers: given processed values
-    in canonical order, it returns the positional values and a mapping of the keyword
-    values.
+    in canonical order, it returns the positional values and a dict of the keyword values.
 
 
     **Constructor**
@@ -931,7 +930,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         return f"{type(self).__name__}({', '.join(fields)})"
 
-    def __tensor_flatten__(self) -> tuple[Sequence[str], list[Any]]:
+    def __tensor_flatten__(self) -> tuple[tuple[str, ...], list[Any]]:
         """
         Flatten the wrapper into inner tensor names and metadata.
 
@@ -1273,7 +1272,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
         Return keyword inner tensor field names and values.
 
         Returns:
-            A mapping from field names to values, with values by reference.
+            A dict from field names to values, with values by reference.
 
         """
         return {name: getattr(self, name) for name in type(self).keyword_inner_tensor_names}
@@ -1306,7 +1305,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
         Return keyword metadata field names and values.
 
         Returns:
-            A mapping from field names to values, with values by reference.
+            A dict from field names to values, with values by reference.
 
         """
         return {name: getattr(self, name) for name in type(self).keyword_metadata_names}
@@ -1374,7 +1373,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
         self: Self,
         *,
         memory_format: torch.memory_format | None = None,
-    ) -> Sequence[int | torch.SymInt]:
+    ) -> tuple[int | torch.SymInt, ...]:
         """
         Return the outer stride for a memory format.
 
@@ -1425,11 +1424,46 @@ class MokitWrapperTensorBase(MokitTensorBase):
         """
         return torch.Tensor._make_wrapper_subclass(cls, *args, **kwargs)
 
+    @overload
     @classmethod
-    def _split_inner_tensor_values(
+    def _split_inner_tensor_values[T: InnerTensorType](
         cls: type[Self],
-        values: Iterator[InnerTensorType] | Sequence[InnerTensorType],
-    ) -> tuple[Sequence[InnerTensorType], dict[str, InnerTensorType]]:
+        values: list[T],
+    ) -> tuple[list[T], dict[str, T]]: ...
+
+    @overload
+    @classmethod
+    def _split_inner_tensor_values[T: InnerTensorType](
+        cls: type[Self],
+        values: tuple[T, ...],
+    ) -> tuple[tuple[T, ...], dict[str, T]]: ...
+
+    @overload
+    @classmethod
+    def _split_inner_tensor_values[T: InnerTensorType](
+        cls: type[Self],
+        values: Sequence[T],
+    ) -> tuple[Sequence[T], dict[str, T]]: ...
+
+    @overload
+    @classmethod
+    def _split_inner_tensor_values[T: InnerTensorType](
+        cls: type[Self],
+        values: Iterator[T],
+    ) -> tuple[tuple[T, ...], dict[str, T]]: ...
+
+    @overload
+    @classmethod
+    def _split_inner_tensor_values[T: InnerTensorType](
+        cls: type[Self],
+        values: Iterator[T] | Sequence[T],
+    ) -> tuple[Sequence[T], dict[str, T]]: ...
+
+    @classmethod
+    def _split_inner_tensor_values[T: InnerTensorType](
+        cls: type[Self],
+        values: Iterator[T] | Sequence[T],
+    ) -> tuple[Sequence[T], dict[str, T]]:
         """
         Split processed inner tensor values into positional and keyword groups.
 
@@ -1437,8 +1471,10 @@ class MokitWrapperTensorBase(MokitTensorBase):
             values: The processed inner tensor values in ``inner_tensor_names()`` order.
 
         Returns:
-            The positional inner tensor values and a mapping from keyword names to values.
-            A ``Sequence`` input yields a positional slice of the same concrete type; an
+            The positional inner tensor values and a dict from keyword names to values.
+            A ``list`` or ``tuple`` input yields a positional result of the same concrete
+            type. Other ``Sequence`` inputs yield ``values[:positional_count]``; the
+            positional result's type follows the input's slicing implementation. An
             iterator input yields a positional tuple.
 
         Raises:
