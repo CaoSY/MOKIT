@@ -4,7 +4,7 @@
 """General-purpose utility helpers for MOKIT."""
 
 from collections.abc import Callable, Hashable, Iterable, Iterator, Sequence
-from typing import Any, cast, overload
+from typing import Any, Literal, cast, overload
 
 
 def _group_keys_by_value_id[KeyType, ValueType, IDType: Hashable](
@@ -91,47 +91,96 @@ def group_by_id[KeyType, ValueType, IDType: Hashable](
     return _group_keys_by_value_id(zip(keys, values, strict=True), idfunc)
 
 
+@overload
 def apply_fn[SourceType, DestType, ResultType](
     src: Iterable[SourceType],
     func: Callable[..., ResultType],
     *args: Any,
     dest: Iterable[DestType] | None = None,
+    lazy: Literal[False] = False,
     **kwargs: Any,
-) -> Iterator[ResultType]:
+) -> list[ResultType]: ...
+
+
+@overload
+def apply_fn[SourceType, DestType, ResultType](
+    src: Iterable[SourceType],
+    func: Callable[..., ResultType],
+    *args: Any,
+    dest: Iterable[DestType] | None = None,
+    lazy: Literal[True],
+    **kwargs: Any,
+) -> Iterator[ResultType]: ...
+
+
+@overload
+def apply_fn[SourceType, DestType, ResultType](
+    src: Iterable[SourceType],
+    func: Callable[..., ResultType],
+    *args: Any,
+    dest: Iterable[DestType] | None = None,
+    lazy: bool,
+    **kwargs: Any,
+) -> Iterator[ResultType] | list[ResultType]: ...
+
+
+def apply_fn[SourceType, DestType, ResultType](
+    src: Iterable[SourceType],
+    func: Callable[..., ResultType],
+    *args: Any,
+    dest: Iterable[DestType] | None = None,
+    lazy: bool = False,
+    **kwargs: Any,
+) -> Iterator[ResultType] | list[ResultType]:
     """
-    Lazily apply a callable to each source value.
+    Apply a callable to each source value.
 
     When ``dest`` is ``None``, the callable is invoked without a destination argument.
     Otherwise, source and destination values are paired by iteration order and the
     callable receives the destination as its ``dest`` keyword argument. This supports
     in-place-style callables, but no in-place behavior is required or enforced: the
     callable may modify ``dest`` and return it, return another value, or return ``None``.
-    The returned iterator yields exactly the callable's return values. Because evaluation
-    is lazy, an in-place modification of ``dest`` happens only when the iterator reaches
-    that source slot; if the iterator is never consumed, the modification never happens.
+    The result contains exactly the callable's return values.
+
+    With ``lazy=False`` (the default), the results are materialized into a list and every
+    call happens before the function returns. With ``lazy=True``, a generator is returned;
+    calls and in-place destination modifications happen only as the generator is consumed.
 
     Args:
         src: The source values passed as the callable's first argument.
         func: The callable applied to each source value.
         *args: Positional arguments forwarded to the callable.
         dest: Optional destination values paired with ``src``.
+        lazy: Whether to return a lazy generator instead of a materialized list.
         **kwargs: Keyword arguments forwarded to the callable.
 
     Returns:
-        An iterator over the callable results, in source iteration order. When ``dest``
-        is provided, these are not necessarily the destination values.
+        A list of results when ``lazy`` is false, or an iterator over the results when
+        ``lazy`` is true. The sequence or iterator contains exactly the values returned by
+        ``func``. When ``dest`` is provided, ``func`` is an in-place-style callable, but
+        the result still contains its return values; whether each returned instance is the
+        corresponding destination object depends entirely on ``func``'s own behavior.
 
     Raises:
-        ValueError: If ``dest`` and ``src`` have different lengths when the iterator is
-            consumed.
-        Exception: Any exception raised by the callable propagates unchanged during
-            iteration.
+        TypeError: If ``lazy`` is not a bool.
+        ValueError: If ``dest`` and ``src`` have different lengths.
+        Exception: Any exception raised by the callable propagates unchanged.
 
     """
+    if not isinstance(lazy, bool):
+        raise TypeError("lazy must be a bool")
+
     if dest is None:
-        return (func(src_val, *args, **kwargs) for src_val in src)
+        if lazy:
+            return (func(src_val, *args, **kwargs) for src_val in src)
+        else:
+            return [func(src_val, *args, **kwargs) for src_val in src]
+
     else:
-        return (func(src_val, *args, dest=dest_val, **kwargs) for (src_val, dest_val) in zip(src, dest, strict=True))
+        if lazy:
+            return (func(src_val, *args, dest=dest_val, **kwargs) for src_val, dest_val in zip(src, dest, strict=True))
+        else:
+            return [func(src_val, *args, dest=dest_val, **kwargs) for src_val, dest_val in zip(src, dest, strict=True)]
 
 
 def apply_fn_by_id[SrcType, SrcIDType: Hashable, DestType, DestIDType: Hashable, ResultType](

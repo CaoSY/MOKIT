@@ -31,7 +31,25 @@ def test_apply_fn_maps_source_values_without_destinations() -> None:
 
 
 def test_apply_fn_is_lazy() -> None:
-    """Test that apply_fn defers callable execution until iteration."""
+    """Test that apply_fn defers callable execution until iteration when lazy."""
+    calls: list[int] = []
+
+    def transform(value: int) -> int:
+        """Record the value and return it."""
+        calls.append(value)
+        return value
+
+    results = apply_fn([1, 2], transform, lazy=True)
+
+    assert calls == []
+    assert next(results) == 1
+    assert calls == [1]
+    assert list(results) == [2]
+    assert calls == [1, 2]
+
+
+def test_apply_fn_is_eager_by_default() -> None:
+    """Test that apply_fn materializes results and runs calls by default."""
     calls: list[int] = []
 
     def transform(value: int) -> int:
@@ -41,11 +59,17 @@ def test_apply_fn_is_lazy() -> None:
 
     results = apply_fn([1, 2], transform)
 
-    assert calls == []
-    assert next(results) == 1
-    assert calls == [1]
-    assert list(results) == [2]
+    assert isinstance(results, list)
+    assert results == [1, 2]
     assert calls == [1, 2]
+
+
+def test_apply_fn_rejects_non_bool_lazy() -> None:
+    """Test that apply_fn requires lazy to be a bool."""
+    lazy: Any = 1
+
+    with pytest.raises(TypeError, match="lazy"):
+        apply_fn([1], lambda value: value, lazy=lazy)
 
 
 def test_apply_fn_pairs_destinations_and_forwards_dest_keyword() -> None:
@@ -92,16 +116,19 @@ def test_apply_fn_returns_callable_results_not_destinations() -> None:
     assert [destination["value"] for destination in destinations] == [1, 2]
 
 
-def test_apply_fn_returns_empty_iterator_for_empty_sources() -> None:
-    """Test that apply_fn returns an empty iterator for empty sources."""
+def test_apply_fn_returns_empty_results_for_empty_sources() -> None:
+    """Test that apply_fn handles empty sources in both modes."""
 
     def identity(value: int) -> int:
         """Return the value unchanged."""
         return value
 
-    assert list(apply_fn([], identity)) == []
-    assert list(apply_fn([], identity, dest=None)) == []
-    assert list(apply_fn([], identity, dest=[])) == []
+    assert apply_fn([], identity) == []
+    assert apply_fn([], identity, dest=None) == []
+    assert apply_fn([], identity, dest=[]) == []
+    assert list(apply_fn([], identity, lazy=True)) == []
+    assert list(apply_fn([], identity, dest=None, lazy=True)) == []
+    assert list(apply_fn([], identity, dest=[], lazy=True)) == []
 
 
 def test_apply_fn_rejects_destination_length_mismatch() -> None:
