@@ -7,7 +7,7 @@ import functools
 import itertools
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from typing import Any, ClassVar, Literal, Protocol, Self, cast, overload
+from typing import Any, ClassVar, Final, Literal, Protocol, Self, cast, overload
 
 import torch
 from torch._custom_class_base import CustomClassBase
@@ -16,6 +16,9 @@ from torch.utils._python_dispatch import return_and_correct_aliasing
 
 from mokit.core import MokitTensorBase
 from mokit.utils import apply_fn_by_id
+
+# An inner tensor value is a real tensor or a registered opaque custom class.
+type InnerTensorType = torch.Tensor | CustomClassBase
 
 
 class HandlerProtocol[
@@ -118,74 +121,10 @@ class TorchDispatchImpl(
 
 
 @overload
-def _call_handler_from_table(
-    owner_cls: type[MokitWrapperTensorBase],
-    table_name: Literal["_TORCH_FN_TABLE"],
-    cls: type[MokitWrapperTensorBase],
-    func: Callable[..., Any],
-    types: tuple[type[Any], ...],
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any] | None,
-) -> tuple[bool, Any]: ...
-
-
-@overload
-def _call_handler_from_table(
-    owner_cls: type[MokitWrapperTensorBase],
-    table_name: Literal["_ATEN_OP_TABLE"],
-    cls: type[MokitWrapperTensorBase],
-    func: OpOverload,
-    types: tuple[type[Any], ...],
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any] | None,
-) -> tuple[bool, Any]: ...
-
-
-def _call_handler_from_table(
-    owner_cls: type[MokitWrapperTensorBase],
-    table_name: Literal["_TORCH_FN_TABLE", "_ATEN_OP_TABLE"],
-    cls: type[MokitWrapperTensorBase],
-    func: Callable[..., Any] | OpOverload,
-    types: tuple[type[Any], ...],
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any] | None,
-) -> tuple[bool, Any]:
-    """
-    Call a handler for ``func`` from ``owner_cls``'s handler table.
-
-    The table is read from ``owner_cls.__dict__``; the exact key is tried first, then the
-    ``None`` wildcard.
-
-    Args:
-        owner_cls: Class whose table is checked.
-        table_name: Name of the table attribute.
-        cls: Runtime dispatch class passed to the handler.
-        func: Dispatched function or operator.
-        types: Participating argument types.
-        args: Positional arguments.
-        kwargs: Keyword arguments.
-
-    Returns:
-        A tuple of whether a handler was found and the handler result.
-
-    """
-    table = owner_cls.__dict__[table_name]
-
-    handler = table.get(func)
-    if handler is None:
-        handler = table.get(None)
-
-    if handler is None:
-        return False, None
-    else:
-        return True, handler(cls, func, types, args, kwargs)
-
-
-@overload
 def _register_handlers(
     cls: type[MokitWrapperTensorBase],
     table_name: Literal["_TORCH_FN_TABLE"],
-    method_name: Literal["__torch_function__"],
+    dispatcher_name: Literal["__torch_function__"],
     keys: tuple[Callable[..., Any] | None, ...],
     func: Callable[..., Any],
     override: bool,
@@ -197,7 +136,7 @@ def _register_handlers(
 def _register_handlers(
     cls: type[MokitWrapperTensorBase],
     table_name: Literal["_ATEN_OP_TABLE"],
-    method_name: Literal["__torch_dispatch__"],
+    dispatcher_name: Literal["__torch_dispatch__"],
     keys: tuple[OpOverload | None, ...],
     func: Callable[..., Any],
     override: bool,
@@ -208,7 +147,7 @@ def _register_handlers(
 def _register_handlers(
     cls: type[MokitWrapperTensorBase],
     table_name: Literal["_TORCH_FN_TABLE", "_ATEN_OP_TABLE"],
-    method_name: Literal["__torch_function__", "__torch_dispatch__"],
+    dispatcher_name: Literal["__torch_function__", "__torch_dispatch__"],
     keys: tuple[Callable[..., Any] | OpOverload | None, ...],
     func: Callable[..., Any],
     override: bool,
@@ -220,14 +159,14 @@ def _register_handlers(
     """
     Register all handler keys for one decorator application.
 
-    Validation failures - a non-callable handler, inconsistent method/table state,
+    Validation failures - a non-callable handler, inconsistent dispatcher/table state,
     a non-dict table, or key conflicts - leave the class unchanged. Failures while
-    installing the generated method or writing the table are fatal.
+    installing the generated dispatcher or writing the table are fatal.
 
     Args:
         cls: Class receiving the handlers.
         table_name: Handler table attribute name.
-        method_name: Dispatch method attribute name.
+        dispatcher_name: Attribute name of the dispatcher.
         keys: Handler keys, including ``None`` for a wildcard.
         func: Handler callable.
         override: Whether to replace existing handlers.
@@ -241,11 +180,11 @@ def _register_handlers(
     if not callable(func):
         raise TypeError("handler must be callable")
 
-    has_method = method_name in cls.__dict__
+    has_dispatcher = dispatcher_name in cls.__dict__
     table = cls.__dict__.get(table_name)
 
-    if has_method and table is None:
-        raise KeyError(f"{cls.__name__} defines its own {method_name} but does not define its own {table_name}.")
+    if has_dispatcher and table is None:
+        raise KeyError(f"{cls.__name__} defines its own {dispatcher_name} but does not define its own {table_name}.")
 
     if table is not None:
         if type(table) is not dict:
@@ -255,8 +194,8 @@ def _register_handlers(
         if conflicts and not override:
             raise KeyError(f"Handlers already registered for {conflicts!r}.")
 
-    if not has_method:
-        setattr(cls, method_name, classmethod(make_method(cls)))
+    if not has_dispatcher:
+        setattr(cls, dispatcher_name, classmethod(make_method(cls)))
 
     entries = {key: func for key in keys}
     if table is None:
@@ -300,9 +239,13 @@ def _make_subclass_torch_function(
             The handler result, or the result after delegating to the parent dispatcher.
 
         """
-        found, result = _call_handler_from_table(owner_cls, "_TORCH_FN_TABLE", cls, func, types, args, kwargs)
-        if found:
-            return result
+        # The generated dispatcher is installed only on classes that own their table.
+        table = owner_cls._TORCH_FN_TABLE
+        handler = table.get(func)
+        if handler is None:
+            handler = table.get(None)
+        if handler is not None:
+            return handler(cls, func, types, args, kwargs)
 
         parent = super(owner_cls, cls)  # pyrefly: ignore[invalid-argument]
         return parent.__torch_function__(func, types, args, kwargs)
@@ -350,14 +293,65 @@ def _make_subclass_torch_dispatch(
             The handler result after schema-declared aliasing correction.
 
         """
-        found, result = _call_handler_from_table(owner_cls, "_ATEN_OP_TABLE", cls, func, types, args, kwargs)
-        if found:
-            return return_and_correct_aliasing(func, args, kwargs, result)
+        # The generated dispatcher is installed only on classes that own their table.
+        table = owner_cls._ATEN_OP_TABLE
+        handler = table.get(func)
+        if handler is None:
+            handler = table.get(None)
+        if handler is not None:
+            return return_and_correct_aliasing(func, args, kwargs, handler(cls, func, types, args, kwargs))
 
         parent = super(owner_cls, cls)  # pyrefly: ignore[invalid-argument]
         return parent.__torch_dispatch__(func, types, args, kwargs)
 
     return __torch_dispatch__
+
+
+_MAKE_WRAPPER_SUBCLASS_KEYWORD_NAMES: Final[tuple[str, ...]] = (
+    "storage_offset",
+    "memory_format",
+    "dtype",
+    "layout",
+    "device",
+    "pin_memory",
+    "requires_grad",
+    "dispatch_sizes_strides_policy",
+    "dispatch_device",
+    "dispatch_layout",
+    "_extra_dispatch_keys",
+    "storage_size",
+)
+
+
+def _mismatch(
+    field: str,
+    self_value: object,
+    other_value: object,
+    *,
+    raise_on_mismatch: bool,
+    kind: str | None = None,
+) -> bool:
+    """
+    Raise or return False for a metadata or native-attribute mismatch.
+
+    Args:
+        field: Name of the mismatched attribute.
+        self_value: Value from the receiver.
+        other_value: Value from the other wrapper.
+        raise_on_mismatch: Whether to raise instead of returning False.
+        kind: Optional category label, such as ``"metadata"``.
+
+    Returns:
+        ``False`` when ``raise_on_mismatch`` is false.
+
+    Raises:
+        ValueError: If ``raise_on_mismatch`` is true.
+
+    """
+    if raise_on_mismatch:
+        label = f"{kind} {field!r}" if kind is not None else field
+        raise ValueError(f"{label} mismatch: self={self_value!r}, other={other_value!r}")
+    return False
 
 
 class MokitWrapperTensorBase(MokitTensorBase):
@@ -397,44 +391,43 @@ class MokitWrapperTensorBase(MokitTensorBase):
         def __repr__(self, *, tensor_contents: str | None = None) -> str: ...
 
         @classmethod
-        def inner_tensor_names(cls: type[Self]) -> Iterator[str]: ...
+        def inner_tensor_names(cls: type[Self]) -> tuple[str, ...]: ...
 
         @classmethod
-        def metadata_names(cls: type[Self]) -> Iterator[str]: ...
+        def metadata_names(cls: type[Self]) -> tuple[str, ...]: ...
 
         @property
-        def inner_tensors(self: Self) -> Iterator[torch.Tensor | CustomClassBase]: ...
+        def inner_tensors(self: Self) -> list[InnerTensorType]: ...
 
         @property
-        def positional_inner_tensors(self: Self) -> Iterator[torch.Tensor | CustomClassBase]: ...
+        def positional_inner_tensors(self: Self) -> list[InnerTensorType]: ...
 
         @property
-        def keyword_inner_tensors(self: Self) -> Iterator[tuple[str, torch.Tensor | CustomClassBase]]: ...
+        def keyword_inner_tensors(self: Self) -> dict[str, InnerTensorType]: ...
 
         @property
-        def metadata(self: Self) -> Iterator[Any]: ...
+        def metadata(self: Self) -> list[Any]: ...
 
         @property
-        def positional_metadata(self: Self) -> Iterator[Any]: ...
+        def positional_metadata(self: Self) -> list[Any]: ...
 
         @property
-        def keyword_metadata(self: Self) -> Iterator[tuple[str, Any]]: ...
+        def keyword_metadata(self: Self) -> dict[str, Any]: ...
 
 
     For each kind, the canonical flatten order is the positional names followed by the
-    keyword names: ``inner_tensor_names()`` chains ``positional_inner_tensor_names`` and
-    ``keyword_inner_tensor_names``, while ``metadata_names()`` does the same for metadata.
-    The separate ``_FLATTEN_ATTR_NAMES`` attribute does not affect flattening; it fixes the
-    order in which the four tuples are validated and printed by ``__repr__``.
+    keyword names: ``inner_tensor_names()`` concatenates ``positional_inner_tensor_names``
+    and ``keyword_inner_tensor_names``, while ``metadata_names()`` does the same for
+    metadata. The separate ``_FLATTEN_ATTR_NAMES`` attribute does not affect flattening; it
+    fixes the order in which the four tuples are validated and printed by ``__repr__``.
 
-    The accessors listed above return a fresh iterator on every access and yield values by
-    reference; ``__repr__`` consumes these values and returns a string. The class tuple is
-    read when the accessor creates the iterator; each instance field is read with
-    ``getattr`` as the iterator advances. Reassigning an instance field before its slot is
-    consumed changes the yielded value; rebinding a class tuple after the iterator is created
-    does not. ``_split_inner_tensor_values`` is a private helper for handlers: given processed
-    values in canonical order, it returns the positional values and a name-keyed mapping
-    of the keyword values.
+    The accessors listed above return a fresh materialized container on every access and
+    contain values by reference; ``__repr__`` consumes these values and returns a string. The
+    class tuple is read when the accessor is called; each instance field is read with
+    ``getattr`` while the container is built. Reassigning an instance field or rebinding a
+    class tuple after the accessor returns does not change the returned container.
+    ``_split_inner_tensor_values`` is a private helper for handlers: given processed values
+    in canonical order, it returns the positional values and a dict of the keyword values.
 
 
     **Constructor**
@@ -491,7 +484,9 @@ class MokitWrapperTensorBase(MokitTensorBase):
     keyword arguments of ``torch.Tensor._make_wrapper_subclass``: ``storage_offset``,
     ``memory_format``, ``dtype``, ``layout``, ``device``, ``pin_memory``, ``requires_grad``,
     ``dispatch_sizes_strides_policy``, ``dispatch_device``, ``dispatch_layout``,
-    ``_extra_dispatch_keys``, and ``storage_size``. Therefore,
+    ``_extra_dispatch_keys``, and ``storage_size``. Only recognized keys supplied by the
+    caller are forwarded to ``_make_outer_tensor``; omitted keys use the shell factory's
+    defaults. Therefore,
 
     1. A field whose value is passed under one of these keyword names is consumed by
        ``__new__`` as shell metadata. Declaring one of these names is acceptable only when
@@ -515,7 +510,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
     and metadata protocol introduced above.
 
     ``__tensor_flatten__`` returns the inner tensor names in ``inner_tensor_names()`` order and a flat
-    tuple of metadata values in ``metadata_names()`` order. PyTorch treats the metadata as opaque; the
+    list of metadata values in ``metadata_names()`` order. PyTorch treats the metadata as opaque; the
     flat representation is private to the flatten/unflatten pair and may change as long as the pair
     stays consistent.
 
@@ -762,9 +757,9 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         assert isinstance(y, ScaledTensor) and y.scale == 0.5
         assert isinstance(z, ScaledTensor) and torch.equal(z.payload, -x.payload)
-        assert x.__tensor_flatten__() == (("payload",), (0.5,))
+        assert x.__tensor_flatten__() == (("payload",), [0.5])
         assert list(x.inner_tensor_names()) == ["payload"]
-        assert list(x.keyword_metadata) == [("scale", 0.5)]
+        assert x.keyword_metadata == {"scale": 0.5}
 
     """
 
@@ -819,7 +814,9 @@ class MokitWrapperTensorBase(MokitTensorBase):
                 ``layout``, ``device``, ``pin_memory``, ``requires_grad``,
                 ``storage_offset``, ``memory_format``, ``storage_size``,
                 ``dispatch_sizes_strides_policy``, ``dispatch_device``,
-                ``dispatch_layout``, and ``_extra_dispatch_keys``.
+                ``dispatch_layout``, and ``_extra_dispatch_keys``. Only recognized keys
+                that are present are forwarded to ``_make_outer_tensor``; omitted keys
+                use the shell factory's defaults.
 
         Returns:
             The outer wrapper shell.
@@ -828,22 +825,8 @@ class MokitWrapperTensorBase(MokitTensorBase):
             TypeError: If the shell factory rejects the provided geometry or shell metadata.
 
         """
-        return cls._make_outer_tensor(
-            size=outer_size,
-            strides=outer_stride,
-            storage_offset=kwargs.get("storage_offset"),
-            memory_format=kwargs.get("memory_format"),
-            dtype=kwargs.get("dtype"),
-            layout=kwargs.get("layout", torch.strided),
-            device=kwargs.get("device"),
-            pin_memory=kwargs.get("pin_memory", False),
-            requires_grad=kwargs.get("requires_grad", False),
-            dispatch_sizes_strides_policy=kwargs.get("dispatch_sizes_strides_policy"),
-            dispatch_device=kwargs.get("dispatch_device", False),
-            dispatch_layout=kwargs.get("dispatch_layout", False),
-            _extra_dispatch_keys=kwargs.get("_extra_dispatch_keys"),
-            storage_size=kwargs.get("storage_size"),
-        )
+        outer_kwargs = {name: kwargs[name] for name in _MAKE_WRAPPER_SUBCLASS_KEYWORD_NAMES if name in kwargs}
+        return cls._make_outer_tensor(size=outer_size, strides=outer_stride, **outer_kwargs)
 
     @classmethod
     def __init_subclass__(cls, **kwargs: Any) -> None:
@@ -947,7 +930,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         return f"{type(self).__name__}({', '.join(fields)})"
 
-    def __tensor_flatten__(self) -> tuple[Sequence[str], tuple[Any, ...]]:
+    def __tensor_flatten__(self) -> tuple[tuple[str, ...], list[Any]]:
         """
         Flatten the wrapper into inner tensor names and metadata.
 
@@ -957,12 +940,12 @@ class MokitWrapperTensorBase(MokitTensorBase):
 
         """
         cls = type(self)
-        return tuple(cls.inner_tensor_names()), tuple(self.metadata)
+        return cls.inner_tensor_names(), self.metadata
 
     @classmethod
     def __tensor_unflatten__(
         cls,
-        inner_tensors: Mapping[str, torch.Tensor | CustomClassBase],
+        inner_tensors: Mapping[str, InnerTensorType],
         metadata: Sequence[Any],
         outer_size: Sequence[int | torch.SymInt],
         outer_stride: Sequence[int | torch.SymInt],
@@ -1025,11 +1008,12 @@ class MokitWrapperTensorBase(MokitTensorBase):
             subclass of every participating type, or the default function result.
 
         """
-        found, result = _call_handler_from_table(
-            MokitWrapperTensorBase, "_TORCH_FN_TABLE", cls, func, types, args, kwargs
-        )
-        if found:
-            return result
+        table = MokitWrapperTensorBase._TORCH_FN_TABLE
+        handler = table.get(func)
+        if handler is None:
+            handler = table.get(None)
+        if handler is not None:
+            return handler(cls, func, types, args, kwargs)
 
         if not all(issubclass(cls, t) for t in types):
             return NotImplemented
@@ -1147,11 +1131,12 @@ class MokitWrapperTensorBase(MokitTensorBase):
             NotImplementedError: If no handler is registered for the operator.
 
         """
-        found, result = _call_handler_from_table(
-            MokitWrapperTensorBase, "_ATEN_OP_TABLE", cls, func, types, args, kwargs
-        )
-        if found:
-            return return_and_correct_aliasing(func, args, kwargs, result)
+        table = MokitWrapperTensorBase._ATEN_OP_TABLE
+        handler = table.get(func)
+        if handler is None:
+            handler = table.get(None)
+        if handler is not None:
+            return return_and_correct_aliasing(func, args, kwargs, handler(cls, func, types, args, kwargs))
 
         arg_types = tuple(type(arg) for arg in args)
         kwarg_types = {param: type(arg) for param, arg in kwargs.items()} if kwargs is not None else None
@@ -1232,100 +1217,98 @@ class MokitWrapperTensorBase(MokitTensorBase):
         return decorator
 
     @classmethod
-    def inner_tensor_names(cls: type[Self]) -> Iterator[str]:
+    def inner_tensor_names(cls: type[Self]) -> tuple[str, ...]:
         """
-        Return an iterator over the inner tensor field names in canonical flatten order.
+        Return the inner tensor field names in canonical flatten order.
 
         The order is ``positional_inner_tensor_names`` followed by ``keyword_inner_tensor_names``.
         The class attributes are read when this method is called.
 
         Returns:
-            An iterator over the flattened inner tensor field names.
+            The flattened inner tensor field names.
 
         """
-        return itertools.chain(cls.positional_inner_tensor_names, cls.keyword_inner_tensor_names)
+        return cls.positional_inner_tensor_names + cls.keyword_inner_tensor_names
 
     @classmethod
-    def metadata_names(cls: type[Self]) -> Iterator[str]:
+    def metadata_names(cls: type[Self]) -> tuple[str, ...]:
         """
-        Return an iterator over the metadata field names in canonical flatten order.
+        Return the metadata field names in canonical flatten order.
 
         The order is ``positional_metadata_names`` followed by ``keyword_metadata_names``.
         The class attributes are read when this method is called.
 
         Returns:
-            An iterator over the flattened metadata field names.
+            The flattened metadata field names.
 
         """
-        return itertools.chain(cls.positional_metadata_names, cls.keyword_metadata_names)
+        return cls.positional_metadata_names + cls.keyword_metadata_names
 
     @property
-    def inner_tensors(self: Self) -> Iterator[torch.Tensor | CustomClassBase]:
+    def inner_tensors(self: Self) -> list[InnerTensorType]:
         """
-        Return an iterator over the declared inner tensor values.
+        Return the declared inner tensor values.
 
         Returns:
-            An iterator over the declared inner tensor values in canonical flatten order, by
-            reference.
+            The declared inner tensor values in canonical flatten order, by reference.
 
         """
-        return (getattr(self, name) for name in type(self).inner_tensor_names())
+        return [getattr(self, name) for name in type(self).inner_tensor_names()]
 
     @property
-    def positional_inner_tensors(self: Self) -> Iterator[torch.Tensor | CustomClassBase]:
+    def positional_inner_tensors(self: Self) -> list[InnerTensorType]:
         """
-        Return an iterator over positional inner tensor values in declaration order.
+        Return positional inner tensor values in declaration order.
 
         Returns:
-            An iterator over the positional inner tensor values by reference.
+            The positional inner tensor values by reference.
 
         """
-        return (getattr(self, name) for name in type(self).positional_inner_tensor_names)
+        return [getattr(self, name) for name in type(self).positional_inner_tensor_names]
 
     @property
-    def keyword_inner_tensors(self: Self) -> Iterator[tuple[str, torch.Tensor | CustomClassBase]]:
+    def keyword_inner_tensors(self: Self) -> dict[str, InnerTensorType]:
         """
-        Return an iterator over keyword inner tensor field names and values.
+        Return keyword inner tensor field names and values.
 
         Returns:
-            An iterator over ``(name, value)`` pairs, with values by reference.
+            A dict from field names to values, with values by reference.
 
         """
-        return ((name, getattr(self, name)) for name in type(self).keyword_inner_tensor_names)
+        return {name: getattr(self, name) for name in type(self).keyword_inner_tensor_names}
 
     @property
-    def metadata(self: Self) -> Iterator[Any]:
+    def metadata(self: Self) -> list[Any]:
         """
-        Return an iterator over the declared metadata values.
+        Return the declared metadata values.
 
         Returns:
-            An iterator over the declared metadata values in canonical flatten order, by
-            reference.
+            The declared metadata values in canonical flatten order, by reference.
 
         """
-        return (getattr(self, name) for name in type(self).metadata_names())
+        return [getattr(self, name) for name in type(self).metadata_names()]
 
     @property
-    def positional_metadata(self: Self) -> Iterator[Any]:
+    def positional_metadata(self: Self) -> list[Any]:
         """
-        Return an iterator over positional metadata values in declaration order.
+        Return positional metadata values in declaration order.
 
         Returns:
-            An iterator over the positional metadata values by reference.
+            The positional metadata values by reference.
 
         """
-        return (getattr(self, name) for name in type(self).positional_metadata_names)
+        return [getattr(self, name) for name in type(self).positional_metadata_names]
 
     @property
-    def keyword_metadata(self: Self) -> Iterator[tuple[str, Any]]:
+    def keyword_metadata(self: Self) -> dict[str, Any]:
         """
-        Return an iterator over keyword metadata field names and values.
+        Return keyword metadata field names and values.
 
         Returns:
-            An iterator over ``(name, value)`` pairs, with values by reference.
+            A dict from field names to values, with values by reference.
 
         """
-        return ((name, getattr(self, name)) for name in type(self).keyword_metadata_names)
+        return {name: getattr(self, name) for name in type(self).keyword_metadata_names}
 
     def has_same_attributes(
         self: Self,
@@ -1355,32 +1338,19 @@ class MokitWrapperTensorBase(MokitTensorBase):
         if type(self) is not type(other):
             raise ValueError(f"type mismatch: self={type(self).__name__}, other={type(other).__name__}")
 
-        def mismatch(
-            field: str,
-            self_value: object,
-            other_value: object,
-            *,
-            kind: str | None = None,
-        ) -> bool:
-            """Raise or return False for the current mismatch."""
-            if raise_on_mismatch:
-                label = f"{kind} {field!r}" if kind is not None else field
-                raise ValueError(f"{label} mismatch: self={self_value!r}, other={other_value!r}")
-            return False
-
         if strict:
             for attr_name in ("dtype", "device", "layout", "shape"):
                 self_value = getattr(self, attr_name)
                 other_value = getattr(other, attr_name)
 
                 if self_value != other_value:
-                    return mismatch(attr_name, self_value, other_value)
+                    return _mismatch(attr_name, self_value, other_value, raise_on_mismatch=raise_on_mismatch)
 
             self_stride = self.stride()
             other_stride = other.stride()
 
             if self_stride != other_stride:
-                return mismatch("stride", self_stride, other_stride)
+                return _mismatch("stride", self_stride, other_stride, raise_on_mismatch=raise_on_mismatch)
 
         for name in type(self).metadata_names():
             self_value = getattr(self, name)
@@ -1395,7 +1365,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
                 raise ValueError(f"metadata {name!r} is not equality-comparable") from exc
 
             if not equal:
-                return mismatch(name, self_value, other_value, kind="metadata")
+                return _mismatch(name, self_value, other_value, raise_on_mismatch=raise_on_mismatch, kind="metadata")
 
         return True
 
@@ -1403,7 +1373,7 @@ class MokitWrapperTensorBase(MokitTensorBase):
         self: Self,
         *,
         memory_format: torch.memory_format | None = None,
-    ) -> Sequence[int | torch.SymInt]:
+    ) -> tuple[int | torch.SymInt, ...]:
         """
         Return the outer stride for a memory format.
 
@@ -1436,8 +1406,10 @@ class MokitWrapperTensorBase(MokitTensorBase):
         Construct an outer wrapper shell.
 
         The default implementation forwards positional and keyword arguments to
-        ``torch.Tensor._make_wrapper_subclass``. Subclasses may override this method to
-        provide their own outer wrapper creation logic.
+        ``torch.Tensor._make_wrapper_subclass``. ``__new__`` forwards only the recognized
+        shell keywords that the caller supplied, so overrides must accept a subset of them
+        and preserve the shell factory's defaults for omitted keys. Subclasses may override
+        this method to provide their own outer wrapper creation logic.
 
         Args:
             *args: Positional arguments for the wrapper factory.
@@ -1452,11 +1424,46 @@ class MokitWrapperTensorBase(MokitTensorBase):
         """
         return torch.Tensor._make_wrapper_subclass(cls, *args, **kwargs)
 
+    @overload
     @classmethod
-    def _split_inner_tensor_values(
+    def _split_inner_tensor_values[T: InnerTensorType](
         cls: type[Self],
-        values: Iterator[Any] | Sequence[Any],
-    ) -> tuple[Sequence[Any], Mapping[str, Any]]:
+        values: list[T],
+    ) -> tuple[list[T], dict[str, T]]: ...
+
+    @overload
+    @classmethod
+    def _split_inner_tensor_values[T: InnerTensorType](
+        cls: type[Self],
+        values: tuple[T, ...],
+    ) -> tuple[tuple[T, ...], dict[str, T]]: ...
+
+    @overload
+    @classmethod
+    def _split_inner_tensor_values[T: InnerTensorType](
+        cls: type[Self],
+        values: Sequence[T],
+    ) -> tuple[Sequence[T], dict[str, T]]: ...
+
+    @overload
+    @classmethod
+    def _split_inner_tensor_values[T: InnerTensorType](
+        cls: type[Self],
+        values: Iterator[T],
+    ) -> tuple[tuple[T, ...], dict[str, T]]: ...
+
+    @overload
+    @classmethod
+    def _split_inner_tensor_values[T: InnerTensorType](
+        cls: type[Self],
+        values: Iterator[T] | Sequence[T],
+    ) -> tuple[Sequence[T], dict[str, T]]: ...
+
+    @classmethod
+    def _split_inner_tensor_values[T: InnerTensorType](
+        cls: type[Self],
+        values: Iterator[T] | Sequence[T],
+    ) -> tuple[Sequence[T], dict[str, T]]:
         """
         Split processed inner tensor values into positional and keyword groups.
 
@@ -1464,8 +1471,11 @@ class MokitWrapperTensorBase(MokitTensorBase):
             values: The processed inner tensor values in ``inner_tensor_names()`` order.
 
         Returns:
-            The positional inner tensor values and the keyword inner tensor values keyed
-            by field name.
+            The positional inner tensor values and a dict from keyword names to values.
+            A ``list`` or ``tuple`` input yields a positional result of the same concrete
+            type. Other ``Sequence`` inputs yield ``values[:positional_count]``; the
+            positional result's type follows the input's slicing implementation. An
+            iterator input yields a positional tuple.
 
         Raises:
             ValueError: If ``values`` does not yield one value per declared inner
@@ -1475,18 +1485,24 @@ class MokitWrapperTensorBase(MokitTensorBase):
         positional_count = len(cls.positional_inner_tensor_names)
 
         if isinstance(values, Sequence):
+            expected_count = positional_count + len(cls.keyword_inner_tensor_names)
+            if len(values) != expected_count:
+                raise ValueError(f"expected {expected_count} inner tensor values, got {len(values)}")
+
             positional_inner_tensors = values[:positional_count]
-            remaining_iterator = itertools.islice(values, positional_count, None)
+            keyword_inner_tensors = {
+                name: values[positional_count + index] for index, name in enumerate(cls.keyword_inner_tensor_names)
+            }
+
         else:
             positional_inner_tensors = tuple(itertools.islice(values, positional_count))
+            if len(positional_inner_tensors) != positional_count:
+                raise ValueError(
+                    f"expected {positional_count} positional inner tensor values, got {len(positional_inner_tensors)}"
+                )
+
             remaining_iterator = values
-
-        if len(positional_inner_tensors) != positional_count:
-            raise ValueError(
-                f"expected {positional_count} positional inner tensor values, got {len(positional_inner_tensors)}"
-            )
-
-        keyword_inner_tensors = dict(zip(cls.keyword_inner_tensor_names, remaining_iterator, strict=True))
+            keyword_inner_tensors = dict(zip(cls.keyword_inner_tensor_names, remaining_iterator, strict=True))
 
         return positional_inner_tensors, keyword_inner_tensors
 
@@ -1607,7 +1623,7 @@ def _[WrapperType: MokitWrapperTensorBase](
     )
 
     cloned_inner_tensor_values = apply_fn_by_id(
-        tuple(self.inner_tensors),
+        self.inner_tensors,
         func,
         memory_format=memory_format,
     )
@@ -1622,7 +1638,7 @@ def _[WrapperType: MokitWrapperTensorBase](
         outer_size=outer_tensor.size(),
         outer_stride=outer_tensor.stride(),
         **keyword_inner_values,
-        **dict(self.keyword_metadata),
+        **self.keyword_metadata,
     )
 
     return outer_tensor
@@ -1684,9 +1700,9 @@ def _[WrapperType: MokitWrapperTensorBase](
     self.has_same_attributes(out, strict=True, raise_on_mismatch=True)
 
     apply_fn_by_id(
-        tuple(self.inner_tensors),
+        self.inner_tensors,
         lambda source, *, dest: func(source, memory_format=memory_format, out=dest),
-        dest=tuple(out.inner_tensors),
+        dest=out.inner_tensors,
     )
 
     return out
@@ -1737,7 +1753,7 @@ def _[WrapperType: MokitWrapperTensorBase](
     aliased = self._apply_fn_to_outer_tensor(func)
 
     aliased_inner_values = apply_fn_by_id(
-        tuple(self.inner_tensors),
+        self.inner_tensors,
         func,
     )
     positional_inner_values, keyword_inner_values = cls._split_inner_tensor_values(aliased_inner_values)
@@ -1749,7 +1765,7 @@ def _[WrapperType: MokitWrapperTensorBase](
         outer_size=aliased.size(),
         outer_stride=aliased.stride(),
         **keyword_inner_values,
-        **dict(self.keyword_metadata),
+        **self.keyword_metadata,
     )
 
     return aliased
@@ -1800,9 +1816,9 @@ def _[WrapperType: MokitWrapperTensorBase](
     self.has_same_attributes(src, strict=True, raise_on_mismatch=True)
 
     apply_fn_by_id(
-        tuple(src.inner_tensors),
+        src.inner_tensors,
         lambda source, *, dest: func(dest, source, non_blocking=non_blocking),
-        dest=tuple(self.inner_tensors),
+        dest=self.inner_tensors,
     )
 
     return self
@@ -1889,7 +1905,7 @@ def _[WrapperType: MokitWrapperTensorBase](
         )
 
     new_inner_tensor_values = apply_fn_by_id(
-        tuple(self.inner_tensors),
+        self.inner_tensors,
         lambda src: func(
             src,
             device=device,
@@ -1918,7 +1934,7 @@ def _[WrapperType: MokitWrapperTensorBase](
         outer_size=outer_tensor.size(),
         outer_stride=outer_tensor.stride(),
         **keyword_inner_values,
-        **dict(self.keyword_metadata),
+        **self.keyword_metadata,
     )
 
     return outer_tensor

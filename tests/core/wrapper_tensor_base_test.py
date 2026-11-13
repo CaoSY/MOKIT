@@ -208,6 +208,37 @@ def test_new_forwards_shell_keywords() -> None:
     assert wrapper.requires_grad
 
 
+def test_new_forwards_only_supplied_outer_kwargs() -> None:
+    """Test that the default __new__ omits outer kwargs the caller did not supply."""
+    outer_kwargs: list[dict[str, Any]] = []
+
+    class _TrackingWrapper(_DefaultNewWrapper):
+        @classmethod
+        def _make_outer_tensor(cls, *args: Any, **kwargs: Any) -> Self:
+            outer_kwargs.append(dict(kwargs))
+            return super()._make_outer_tensor(*args, **kwargs)
+
+    inner = torch.arange(4, dtype=torch.float64)
+
+    _TrackingWrapper(inner, "tag", outer_size=(4,), outer_stride=(1,))
+
+    assert set(outer_kwargs[0]) == {"size", "strides"}
+
+    _TrackingWrapper(
+        inner,
+        "tag",
+        outer_size=(4,),
+        outer_stride=(1,),
+        dtype=torch.float64,
+        device=torch.device("meta"),
+    )
+
+    assert outer_kwargs[1]["dtype"] is torch.float64
+    assert outer_kwargs[1]["device"] == torch.device("meta")
+    assert "layout" not in outer_kwargs[1]
+    assert "requires_grad" not in outer_kwargs[1]
+
+
 def test_new_requires_outer_size() -> None:
     """Test that the default __new__ requires outer_size."""
     with pytest.raises(TypeError, match="outer_size"):
@@ -610,7 +641,8 @@ def test_tensor_flatten_returns_inner_names_and_metadata() -> None:
     wrapper = _Wrapper(torch.tensor([1.0, 2.0]), "hello", bias=torch.tensor([3.0, 4.0]), note="world")
     tensor_names, metadata = wrapper.__tensor_flatten__()
     assert tuple(tensor_names) == ("payload", "bias")
-    assert metadata == ("hello", "world")
+    assert isinstance(metadata, list)
+    assert metadata == ["hello", "world"]
 
 
 def test_tensor_flatten_empty_wrapper() -> None:
@@ -618,7 +650,7 @@ def test_tensor_flatten_empty_wrapper() -> None:
     wrapper = _EmptyWrapper()
     tensor_names, metadata = wrapper.__tensor_flatten__()
     assert tuple(tensor_names) == ()
-    assert metadata == ()
+    assert metadata == []
 
 
 # ------------------------------------------------------------------------------
@@ -3358,38 +3390,39 @@ def test_torch_function_forwards_related_types() -> None:
 
 
 def test_inner_tensors_collects_positional_and_keyword_tensors() -> None:
-    """Test that inner_tensors yields positional then keyword tensors by reference."""
-    payload = torch.tensor([1.0, 2.0])
-    bias = torch.tensor([3.0, 4.0])
-    wrapper = _Wrapper(payload, "hello", bias=bias, note="world")
-
-    inner_tensors = tuple(wrapper.inner_tensors)
-
-    assert len(inner_tensors) == 2
-    assert inner_tensors[0] is payload
-    assert inner_tensors[1] is bias
-
-
-def test_inner_tensors_returns_fresh_iterator() -> None:
-    """Test that inner_tensors returns a fresh iterator each access."""
+    """Test that inner_tensors returns positional then keyword tensors by reference."""
     payload = torch.tensor([1.0, 2.0])
     bias = torch.tensor([3.0, 4.0])
     wrapper = _Wrapper(payload, "hello", bias=bias, note="world")
 
     inner_tensors = wrapper.inner_tensors
-    values = tuple(inner_tensors)
 
-    assert iter(inner_tensors) is inner_tensors
-    assert len(values) == 2
-    assert values[0] is payload
-    assert values[1] is bias
-    assert tuple(inner_tensors) == ()
-    assert next(wrapper.inner_tensors) is payload
+    assert isinstance(inner_tensors, list)
+    assert len(inner_tensors) == 2
+    assert inner_tensors[0] is payload
+    assert inner_tensors[1] is bias
 
 
-def test_inner_tensors_returns_empty_iterator_for_empty_wrapper() -> None:
+def test_inner_tensors_returns_fresh_container() -> None:
+    """Test that inner_tensors returns a fresh list each access."""
+    payload = torch.tensor([1.0, 2.0])
+    bias = torch.tensor([3.0, 4.0])
+    wrapper = _Wrapper(payload, "hello", bias=bias, note="world")
+
+    first = wrapper.inner_tensors
+    second = wrapper.inner_tensors
+
+    assert first is not second
+    assert len(first) == 2
+    assert first[0] is payload
+    assert first[1] is bias
+    assert second[0] is payload
+    assert second[1] is bias
+
+
+def test_inner_tensors_returns_empty_container_for_empty_wrapper() -> None:
     """Test that inner_tensors is empty for a wrapper with no inner tensors."""
-    assert tuple(_EmptyWrapper().inner_tensors) == ()
+    assert _EmptyWrapper().inner_tensors == []
 
 
 # ------------------------------------------------------------------------------
@@ -3398,38 +3431,39 @@ def test_inner_tensors_returns_empty_iterator_for_empty_wrapper() -> None:
 
 
 def test_positional_inner_tensors_returns_positional_tensors() -> None:
-    """Test that positional_inner_tensors yields the positional tensors by reference."""
-    left = torch.tensor([1.0, 2.0])
-    right = torch.tensor([3.0, 4.0])
-    wrapper = _AliasWrapper(left, right)
-
-    positional_inner_tensors = tuple(wrapper.positional_inner_tensors)
-
-    assert len(positional_inner_tensors) == 2
-    assert positional_inner_tensors[0] is left
-    assert positional_inner_tensors[1] is right
-
-
-def test_positional_inner_tensors_returns_fresh_iterator() -> None:
-    """Test that positional_inner_tensors returns a fresh iterator on each access."""
+    """Test that positional_inner_tensors returns the positional tensors by reference."""
     left = torch.tensor([1.0, 2.0])
     right = torch.tensor([3.0, 4.0])
     wrapper = _AliasWrapper(left, right)
 
     positional_inner_tensors = wrapper.positional_inner_tensors
-    values = tuple(positional_inner_tensors)
 
-    assert iter(positional_inner_tensors) is positional_inner_tensors
-    assert len(values) == 2
-    assert values[0] is left
-    assert values[1] is right
-    assert tuple(positional_inner_tensors) == ()
-    assert next(wrapper.positional_inner_tensors) is left
+    assert isinstance(positional_inner_tensors, list)
+    assert len(positional_inner_tensors) == 2
+    assert positional_inner_tensors[0] is left
+    assert positional_inner_tensors[1] is right
 
 
-def test_positional_inner_tensors_returns_empty_iterator_for_empty_wrapper() -> None:
+def test_positional_inner_tensors_returns_fresh_container() -> None:
+    """Test that positional_inner_tensors returns a fresh list on each access."""
+    left = torch.tensor([1.0, 2.0])
+    right = torch.tensor([3.0, 4.0])
+    wrapper = _AliasWrapper(left, right)
+
+    first = wrapper.positional_inner_tensors
+    second = wrapper.positional_inner_tensors
+
+    assert first is not second
+    assert len(first) == 2
+    assert first[0] is left
+    assert first[1] is right
+    assert second[0] is left
+    assert second[1] is right
+
+
+def test_positional_inner_tensors_returns_empty_container_for_empty_wrapper() -> None:
     """Test that positional_inner_tensors is empty for a wrapper with no positional tensors."""
-    assert tuple(_EmptyWrapper().positional_inner_tensors) == ()
+    assert _EmptyWrapper().positional_inner_tensors == []
 
 
 # ------------------------------------------------------------------------------
@@ -3438,36 +3472,34 @@ def test_positional_inner_tensors_returns_empty_iterator_for_empty_wrapper() -> 
 
 
 def test_keyword_inner_tensors_returns_keyword_tensors() -> None:
-    """Test that keyword_inner_tensors yields keyword tensor names and values by reference."""
-    bias = torch.tensor([3.0, 4.0])
-    wrapper = _Wrapper(torch.tensor([1.0, 2.0]), "hello", bias=bias, note="world")
-
-    keyword_inner_tensors = tuple(wrapper.keyword_inner_tensors)
-
-    assert len(keyword_inner_tensors) == 1
-    name, value = keyword_inner_tensors[0]
-    assert name == "bias"
-    assert value is bias
-
-
-def test_keyword_inner_tensors_returns_fresh_iterator() -> None:
-    """Test that keyword_inner_tensors returns a fresh iterator on each access."""
+    """Test that keyword_inner_tensors maps keyword tensor names to values by reference."""
     bias = torch.tensor([3.0, 4.0])
     wrapper = _Wrapper(torch.tensor([1.0, 2.0]), "hello", bias=bias, note="world")
 
     keyword_inner_tensors = wrapper.keyword_inner_tensors
-    pairs = tuple(keyword_inner_tensors)
 
-    assert iter(keyword_inner_tensors) is keyword_inner_tensors
-    assert len(pairs) == 1
-    assert pairs[0][1] is bias
-    assert tuple(keyword_inner_tensors) == ()
-    assert next(wrapper.keyword_inner_tensors)[1] is bias
+    assert isinstance(keyword_inner_tensors, dict)
+    assert tuple(keyword_inner_tensors) == ("bias",)
+    assert keyword_inner_tensors["bias"] is bias
 
 
-def test_keyword_inner_tensors_returns_empty_iterator_for_empty_wrapper() -> None:
+def test_keyword_inner_tensors_returns_fresh_container() -> None:
+    """Test that keyword_inner_tensors returns a fresh dict on each access."""
+    bias = torch.tensor([3.0, 4.0])
+    wrapper = _Wrapper(torch.tensor([1.0, 2.0]), "hello", bias=bias, note="world")
+
+    first = wrapper.keyword_inner_tensors
+    second = wrapper.keyword_inner_tensors
+
+    assert first is not second
+    assert tuple(first) == ("bias",)
+    assert first["bias"] is bias
+    assert second["bias"] is bias
+
+
+def test_keyword_inner_tensors_returns_empty_container_for_empty_wrapper() -> None:
     """Test that keyword_inner_tensors is empty for a wrapper with no keyword tensors."""
-    assert tuple(_EmptyWrapper().keyword_inner_tensors) == ()
+    assert _EmptyWrapper().keyword_inner_tensors == {}
 
 
 # ------------------------------------------------------------------------------
@@ -3476,35 +3508,36 @@ def test_keyword_inner_tensors_returns_empty_iterator_for_empty_wrapper() -> Non
 
 
 def test_metadata_collects_positional_and_keyword_metadata() -> None:
-    """Test that metadata yields positional and keyword metadata in declared order."""
+    """Test that metadata returns positional and keyword metadata in declared order."""
     tag = ["tag"]
     note = {"note": 1}
     wrapper = _Wrapper(torch.zeros(2, 3), tag, note=note)
 
-    metadata = tuple(wrapper.metadata)
+    metadata = wrapper.metadata
 
-    assert metadata == (tag, note)
+    assert isinstance(metadata, list)
+    assert len(metadata) == 2
     assert metadata[0] is tag
     assert metadata[1] is note
 
 
-def test_metadata_returns_fresh_iterator() -> None:
-    """Test that metadata returns a fresh iterator each access."""
+def test_metadata_returns_fresh_container() -> None:
+    """Test that metadata returns a fresh list each access."""
     tag = object()
     note = object()
     wrapper = _Wrapper(torch.zeros(2, 3), tag, note=note)
 
-    metadata = wrapper.metadata
+    first = wrapper.metadata
+    second = wrapper.metadata
 
-    assert iter(metadata) is metadata
-    assert list(metadata) == [tag, note]
-    assert list(metadata) == []
-    assert tuple(wrapper.metadata) == (tag, note)
+    assert first is not second
+    assert list(first) == [tag, note]
+    assert list(second) == [tag, note]
 
 
-def test_metadata_returns_empty_iterator_for_empty_wrapper() -> None:
+def test_metadata_returns_empty_container_for_empty_wrapper() -> None:
     """Test that metadata is empty for a wrapper with no metadata fields."""
-    assert tuple(_EmptyWrapper().metadata) == ()
+    assert _EmptyWrapper().metadata == []
 
 
 # ------------------------------------------------------------------------------
@@ -3513,32 +3546,34 @@ def test_metadata_returns_empty_iterator_for_empty_wrapper() -> None:
 
 
 def test_positional_metadata_returns_positional_values() -> None:
-    """Test that positional_metadata yields the positional metadata values by reference."""
-    tag = ["tag"]
-    wrapper = _Wrapper(torch.zeros(2, 3), tag, note={"note": 1})
-
-    positional_metadata = tuple(wrapper.positional_metadata)
-
-    assert positional_metadata == (tag,)
-    assert positional_metadata[0] is tag
-
-
-def test_positional_metadata_returns_fresh_iterator() -> None:
-    """Test that positional_metadata returns a fresh iterator on each access."""
+    """Test that positional_metadata returns the positional metadata values by reference."""
     tag = ["tag"]
     wrapper = _Wrapper(torch.zeros(2, 3), tag, note={"note": 1})
 
     positional_metadata = wrapper.positional_metadata
 
-    assert iter(positional_metadata) is positional_metadata
-    assert tuple(positional_metadata) == (tag,)
-    assert tuple(positional_metadata) == ()
-    assert tuple(wrapper.positional_metadata) == (tag,)
+    assert isinstance(positional_metadata, list)
+    assert len(positional_metadata) == 1
+    assert positional_metadata[0] is tag
 
 
-def test_positional_metadata_returns_empty_iterator_for_empty_wrapper() -> None:
+def test_positional_metadata_returns_fresh_container() -> None:
+    """Test that positional_metadata returns a fresh list on each access."""
+    tag = ["tag"]
+    wrapper = _Wrapper(torch.zeros(2, 3), tag, note={"note": 1})
+
+    first = wrapper.positional_metadata
+    second = wrapper.positional_metadata
+
+    assert first is not second
+    assert len(first) == 1
+    assert first[0] is tag
+    assert second[0] is tag
+
+
+def test_positional_metadata_returns_empty_container_for_empty_wrapper() -> None:
     """Test that positional_metadata is empty for a wrapper with no positional metadata."""
-    assert tuple(_EmptyWrapper().positional_metadata) == ()
+    assert _EmptyWrapper().positional_metadata == []
 
 
 # ------------------------------------------------------------------------------
@@ -3547,36 +3582,34 @@ def test_positional_metadata_returns_empty_iterator_for_empty_wrapper() -> None:
 
 
 def test_keyword_metadata_returns_keyword_values() -> None:
-    """Test that keyword_metadata yields keyword metadata names and values by reference."""
+    """Test that keyword_metadata maps keyword metadata names to values by reference."""
     note = {"note": 1}
     wrapper = _Wrapper(torch.zeros(2, 3), note=note)
 
-    keyword_metadata = tuple(wrapper.keyword_metadata)
+    keyword_metadata = wrapper.keyword_metadata
 
-    assert len(keyword_metadata) == 1
-    name, value = keyword_metadata[0]
-    assert name == "note"
-    assert value is note
+    assert isinstance(keyword_metadata, dict)
+    assert tuple(keyword_metadata) == ("note",)
+    assert keyword_metadata["note"] is note
 
 
-def test_keyword_metadata_returns_fresh_iterator() -> None:
-    """Test that keyword_metadata returns a fresh iterator on each access."""
+def test_keyword_metadata_returns_fresh_container() -> None:
+    """Test that keyword_metadata returns a fresh dict on each access."""
     note = object()
     wrapper = _Wrapper(torch.zeros(2, 3), note=note)
 
-    keyword_metadata = wrapper.keyword_metadata
-    pairs = tuple(keyword_metadata)
+    first = wrapper.keyword_metadata
+    second = wrapper.keyword_metadata
 
-    assert iter(keyword_metadata) is keyword_metadata
-    assert len(pairs) == 1
-    assert pairs[0][1] is note
-    assert tuple(keyword_metadata) == ()
-    assert next(wrapper.keyword_metadata)[1] is note
+    assert first is not second
+    assert tuple(first) == ("note",)
+    assert first["note"] is note
+    assert second["note"] is note
 
 
-def test_keyword_metadata_returns_empty_iterator_for_empty_wrapper() -> None:
+def test_keyword_metadata_returns_empty_container_for_empty_wrapper() -> None:
     """Test that keyword_metadata is empty for a wrapper with no keyword metadata."""
-    assert tuple(_EmptyWrapper().keyword_metadata) == ()
+    assert _EmptyWrapper().keyword_metadata == {}
 
 
 # ------------------------------------------------------------------------------
@@ -3586,18 +3619,18 @@ def test_keyword_metadata_returns_empty_iterator_for_empty_wrapper() -> None:
 
 def test_inner_tensor_names_concatenates_positional_and_keyword_names() -> None:
     """Test that inner_tensor_names uses positional-then-keyword declaration order."""
-    assert tuple(_Wrapper.inner_tensor_names()) == ("payload", "bias")
-    assert tuple(_AliasWrapper.inner_tensor_names()) == ("left", "right")
+    assert _Wrapper.inner_tensor_names() == ("payload", "bias")
+    assert _AliasWrapper.inner_tensor_names() == ("left", "right")
 
 
-def test_inner_tensor_names_returns_fresh_iterator() -> None:
-    """Test that inner_tensor_names returns a fresh iterator on each access."""
-    names = _Wrapper.inner_tensor_names()
+def test_inner_tensor_names_returns_fresh_container() -> None:
+    """Test that inner_tensor_names returns a fresh tuple on each access."""
+    first = _Wrapper.inner_tensor_names()
+    second = _Wrapper.inner_tensor_names()
 
-    assert iter(names) is names
-    assert tuple(names) == ("payload", "bias")
-    assert tuple(names) == ()
-    assert tuple(_Wrapper.inner_tensor_names()) == ("payload", "bias")
+    assert first is not second
+    assert first == ("payload", "bias")
+    assert second == ("payload", "bias")
 
 
 def test_inner_tensor_names_reflects_class_attribute_updates() -> None:
@@ -3608,16 +3641,16 @@ def test_inner_tensor_names_reflects_class_attribute_updates() -> None:
 
         positional_inner_tensor_names = ("payload",)
 
-    assert tuple(_DynamicInnerWrapper.inner_tensor_names()) == ("payload",)
+    assert _DynamicInnerWrapper.inner_tensor_names() == ("payload",)
 
     _DynamicInnerWrapper.keyword_inner_tensor_names = ("bias",)
 
-    assert tuple(_DynamicInnerWrapper.inner_tensor_names()) == ("payload", "bias")
+    assert _DynamicInnerWrapper.inner_tensor_names() == ("payload", "bias")
 
 
-def test_inner_tensor_names_returns_empty_iterator_for_empty_wrapper() -> None:
+def test_inner_tensor_names_returns_empty_container_for_empty_wrapper() -> None:
     """Test that inner_tensor_names is empty for a wrapper with no inner tensors."""
-    assert tuple(_EmptyWrapper.inner_tensor_names()) == ()
+    assert _EmptyWrapper.inner_tensor_names() == ()
 
 
 # ------------------------------------------------------------------------------
@@ -3627,17 +3660,17 @@ def test_inner_tensor_names_returns_empty_iterator_for_empty_wrapper() -> None:
 
 def test_metadata_names_concatenates_positional_and_keyword_names() -> None:
     """Test that metadata_names uses positional-then-keyword declaration order."""
-    assert tuple(_Wrapper.metadata_names()) == ("tag", "note")
+    assert _Wrapper.metadata_names() == ("tag", "note")
 
 
-def test_metadata_names_returns_fresh_iterator() -> None:
-    """Test that metadata_names returns a fresh iterator on each access."""
-    names = _Wrapper.metadata_names()
+def test_metadata_names_returns_fresh_container() -> None:
+    """Test that metadata_names returns a fresh tuple on each access."""
+    first = _Wrapper.metadata_names()
+    second = _Wrapper.metadata_names()
 
-    assert iter(names) is names
-    assert tuple(names) == ("tag", "note")
-    assert tuple(names) == ()
-    assert tuple(_Wrapper.metadata_names()) == ("tag", "note")
+    assert first is not second
+    assert first == ("tag", "note")
+    assert second == ("tag", "note")
 
 
 def test_metadata_names_reflects_class_attribute_updates() -> None:
@@ -3648,11 +3681,11 @@ def test_metadata_names_reflects_class_attribute_updates() -> None:
 
         positional_metadata_names = ("tag",)
 
-    assert tuple(_DynamicMetadataWrapper.metadata_names()) == ("tag",)
+    assert _DynamicMetadataWrapper.metadata_names() == ("tag",)
 
     _DynamicMetadataWrapper.keyword_metadata_names = ("note",)
 
-    assert tuple(_DynamicMetadataWrapper.metadata_names()) == ("tag", "note")
+    assert _DynamicMetadataWrapper.metadata_names() == ("tag", "note")
 
 
 def test_metadata_names_returns_empty_iterator_for_empty_wrapper() -> None:
@@ -3849,17 +3882,29 @@ def test_apply_fn_to_outer_tensor_forwards_arguments() -> None:
 
 
 def test_split_inner_tensor_values_splits_positional_and_keyword_groups() -> None:
-    """Test that _split_inner_tensor_values returns positional values and a keyword mapping."""
+    """Test that _split_inner_tensor_values returns positional values and a keyword dict."""
     payload = torch.tensor([1.0, 2.0])
     bias = torch.tensor([3.0, 4.0])
 
     positional, keyword = _Wrapper._split_inner_tensor_values((payload, bias))
 
     assert isinstance(positional, tuple)
-    assert isinstance(keyword, dict)
     assert len(positional) == 1
     assert positional[0] is payload
+    assert isinstance(keyword, dict)
     assert tuple(keyword) == ("bias",)
+    assert keyword["bias"] is bias
+
+
+def test_split_inner_tensor_values_preserves_sequence_type() -> None:
+    """Test that a Sequence input yields a positional slice of the same concrete type."""
+    payload = torch.tensor([1.0, 2.0])
+    bias = torch.tensor([3.0, 4.0])
+
+    positional, keyword = _Wrapper._split_inner_tensor_values([payload, bias])
+
+    assert isinstance(positional, list)
+    assert positional[0] is payload
     assert keyword["bias"] is bias
 
 
@@ -3870,6 +3915,7 @@ def test_split_inner_tensor_values_accepts_iterator() -> None:
 
     positional, keyword = _Wrapper._split_inner_tensor_values(iter((payload, bias)))
 
+    assert isinstance(positional, tuple)
     assert positional[0] is payload
     assert keyword["bias"] is bias
 
@@ -3887,14 +3933,17 @@ def test_split_inner_tensor_values_rejects_length_mismatch() -> None:
     payload = torch.tensor([1.0, 2.0])
     bias = torch.tensor([3.0, 4.0])
 
-    with pytest.raises(ValueError, match="positional inner tensor values"):
+    with pytest.raises(ValueError, match="expected 2 inner tensor values"):
         _AliasWrapper._split_inner_tensor_values((payload,))
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="expected 2 inner tensor values"):
         _Wrapper._split_inner_tensor_values((payload,))
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="expected 2 inner tensor values"):
         _Wrapper._split_inner_tensor_values((payload, bias, bias))
+
+    with pytest.raises(ValueError, match="positional inner tensor values"):
+        _AliasWrapper._split_inner_tensor_values(iter((payload,)))
 
 
 # ------------------------------------------------------------------------------
@@ -4204,10 +4253,9 @@ def test_custom_opaque_inner_tensors_are_exposed_by_reference() -> None:
     assert positional_inner_tensors[0] is payload
     assert positional_inner_tensors[1] is positional_handle
 
-    keyword_inner_tensors = list(wrapper.keyword_inner_tensors)
-    assert len(keyword_inner_tensors) == 1
-    assert keyword_inner_tensors[0][0] == "keyword_handle"
-    assert keyword_inner_tensors[0][1] is keyword_handle
+    keyword_inner_tensors = wrapper.keyword_inner_tensors
+    assert tuple(keyword_inner_tensors) == ("keyword_handle",)
+    assert keyword_inner_tensors["keyword_handle"] is keyword_handle
 
     assert list(wrapper.inner_tensor_names()) == ["payload", "positional_handle", "keyword_handle"]
 
@@ -4218,7 +4266,7 @@ def test_custom_opaque_inner_tensors_flatten_and_unflatten() -> None:
 
     inner_tensor_names, metadata = wrapper.__tensor_flatten__()
     assert inner_tensor_names == ("payload", "positional_handle", "keyword_handle")
-    assert metadata == ("tag", "note")
+    assert metadata == ["tag", "note"]
 
     inner_tensors = dict(zip(inner_tensor_names, wrapper.inner_tensors, strict=True))
     rebuilt = type(wrapper).__tensor_unflatten__(

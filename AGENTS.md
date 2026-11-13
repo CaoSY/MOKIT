@@ -64,6 +64,23 @@ def quantize(tensor: torch.Tensor, scale: torch.Tensor) -> torch.Tensor: ...
 Annotate every parameter and return type, and make them accurate — look a type up
 rather than guessing, since a wrong annotation is worse than none.
 
+Follow Python's variance rule: parameters are contravariant, returns are covariant.
+
+- **Parameters:** accept the broadest type the implementation can handle. Prefer
+  `Iterable`, `Sequence`, or `Mapping` over `list` or `dict` unless concrete behavior
+  or mutation is required.
+- **Returns:** promise the narrowest type the implementation always guarantees. Use a
+  concrete container when a fresh, caller-owned object is part of the contract;
+  otherwise use a read-only protocol such as `Sequence`, `Mapping`, or `tuple`.
+- **Overrides and generics:** parameters may widen and returns may narrow. Use `Self`
+  for methods returning the runtime class, and mark type variables covariant or
+  contravariant according to their use.
+- **`Any`:** use it only for opaque or forwarded values; prefer `object` or a precise
+  protocol where possible.
+
+These rules may be violated deliberately for API, performance, or compatibility
+reasons. Leave a short note explaining the exception if the reason is not obvious.
+
 ### How to organize unit tests
 
 Tests live under `tests/`, mirroring the `mokit/` package layout.
