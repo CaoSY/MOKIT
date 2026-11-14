@@ -129,3 +129,136 @@ class FeedForward(torch.nn.Module):
         return (
             f"in_features={self.in_features}, hidden_features={self.hidden_features}, out_features={self.out_features}"
         )
+
+
+class GatedFeedForward(torch.nn.Module):
+    r"""
+    A gated feed-forward network with a fused gate and up projection.
+
+    This module computes
+    :math:`y = W_\text{down} (\phi(W_\text{gate} x + b_\text{gate}) \odot
+    (W_\text{up} x + b_\text{up})) + b_\text{down}`,
+    where :math:`\phi` is the activation. The gate and up projections are
+    stored as one weight of shape :math:`(2 H_\text{hidden}, H_\text{in})`, so
+    a single matrix multiplication produces both halves.
+
+    Args:
+        in_features: Size of each input sample.
+        hidden_features: Size of each of the two parallel projections. The
+            fused projection has ``2 * hidden_features`` output features.
+        out_features: Size of each output sample.
+        activation: The activation module type or factory. It is called with
+            no arguments, and the resulting module is applied to the gate
+            half. To configure the activation, pass a factory such as
+            ``functools.partial(torch.nn.SiLU, inplace=True)``.
+            Default: ``torch.nn.SiLU``
+        bias: A boolean sets the bias of both ``gate_up_proj`` and
+            ``down_proj``; a two-element tuple sets them separately.
+            Default: ``True``
+        device: The device of the parameters. Default: ``None``
+        dtype: The dtype of the parameters. Default: ``None``
+
+    Shape:
+        - Input: :math:`(*, H_\text{in})`, where :math:`H_\text{in} =
+          \text{in\_features}`.
+        - Output: :math:`(*, H_\text{out})`, where all dimensions except the
+          last match the input and :math:`H_\text{out} = \text{out\_features}`.
+
+    Attributes:
+        in_features: Size of each input sample.
+        hidden_features: Size of each of the two parallel projections.
+        out_features: Size of each output sample.
+        gate_up_proj: The fused projection from ``in_features`` to
+            ``2 * hidden_features``. The first ``hidden_features`` outputs are
+            the gate half and the remaining outputs are the up half. Its
+            weight is initialized from
+            :math:`\mathcal{U}(-\sqrt{k}, \sqrt{k})`, where
+            :math:`k = 1 / \text{in\_features}`, and its bias, when present,
+            is initialized in the same range.
+        activation: The activation module applied to the gate half.
+        down_proj: The projection from ``hidden_features`` to ``out_features``.
+            Its weight is initialized from
+            :math:`\mathcal{U}(-\sqrt{k}, \sqrt{k})`, where
+            :math:`k = 1 / \text{hidden\_features}`, and its bias, when
+            present, is initialized in the same range.
+
+    Note:
+        TODO: Add serialization support that concatenates ``gate_proj`` and
+        ``up_proj`` into ``gate_up_proj`` when loading and splits it when
+        saving.
+
+    Examples::
+
+        >>> m = GatedFeedForward(20, 64, 30)
+        >>> input = torch.randn(8, 20)
+        >>> output = m(input)
+        >>> print(output.size())
+        torch.Size([8, 30])
+
+    """
+
+    __constants__: ClassVar[list[str]] = ["in_features", "hidden_features", "out_features"]
+
+    def __init__(
+        self: Self,
+        in_features: int,
+        hidden_features: int,
+        out_features: int,
+        activation: Callable[..., torch.nn.Module] = torch.nn.SiLU,
+        bias: bool | tuple[bool, bool] = True,
+        device: Device = None,
+        dtype: torch.dtype | None = None,
+    ) -> None:
+        """
+        Initialize the gated feed-forward network.
+
+        Args:
+            in_features: Size of each input sample.
+            hidden_features: Size of each of the two parallel projections.
+            out_features: Size of each output sample.
+            activation: The activation module type or factory.
+            bias: A boolean sets the bias of both ``gate_up_proj`` and
+                ``down_proj``; a two-element tuple sets them separately.
+                Default: ``True``
+            device: The device of the parameters.
+            dtype: The dtype of the parameters.
+
+        Raises:
+            ValueError: If ``bias`` is a tuple whose length is not 2.
+
+        """
+        super().__init__()
+        factory_kwargs = {"device": device, "dtype": dtype}
+        gate_up_bias, down_bias = (bias, bias) if isinstance(bias, bool) else bias
+        self.in_features = in_features
+        self.hidden_features = hidden_features
+        self.out_features = out_features
+        self.gate_up_proj = torch.nn.Linear(in_features, 2 * hidden_features, bias=gate_up_bias, **factory_kwargs)
+        self.activation = activation()
+        self.down_proj = torch.nn.Linear(hidden_features, out_features, bias=down_bias, **factory_kwargs)
+
+    def forward(self: Self, input: torch.Tensor) -> torch.Tensor:
+        """
+        Run the forward pass.
+
+        Args:
+            input: The input tensor of shape ``(..., in_features)``.
+
+        Returns:
+            The output tensor of shape ``(..., out_features)``.
+
+        """
+        gate, up = self.gate_up_proj(input).tensor_split(2, dim=-1)
+        return self.down_proj(self.activation(gate) * up)
+
+    def extra_repr(self: Self) -> str:
+        """
+        Return the extra representation of the module.
+
+        Returns:
+            A string describing the module configuration.
+
+        """
+        return (
+            f"in_features={self.in_features}, hidden_features={self.hidden_features}, out_features={self.out_features}"
+        )
