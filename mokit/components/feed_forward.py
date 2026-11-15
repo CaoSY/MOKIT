@@ -10,6 +10,7 @@ import torch
 from torch.types import Device
 
 from mokit.components.linear import GroupedLinear
+from mokit.types import DType
 
 
 class FeedForward(torch.nn.Module):
@@ -383,7 +384,13 @@ class GroupedFeedForward(torch.nn.Module):
         self.activation = activation()
         self.down_proj = GroupedLinear(num_groups, hidden_features, out_features, bias=down_bias, **factory_kwargs)
 
-    def forward(self: Self, input: torch.Tensor, *, offs: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(
+        self: Self,
+        input: torch.Tensor,
+        *,
+        offs: torch.Tensor | None = None,
+        out_dtype: DType | tuple[DType, DType] = None,
+    ) -> torch.Tensor:
         """
         Run the forward pass.
 
@@ -394,15 +401,23 @@ class GroupedFeedForward(torch.nn.Module):
                 ``None``.
             offs: Optional offsets of shape ``(num_groups,)``. Required for
                 2D input and forbidden for 3D input.
+            out_dtype: Optional output dtype for the projections. A scalar or
+                ``None`` applies to both; a two-element tuple sets ``up_proj``
+                and ``down_proj`` separately. ``None`` follows each
+                projection's input dtype.
 
         Returns:
             The output tensor of shape ``(M, out_features)`` for 2D input, or
-            ``(num_groups, M_g, out_features)`` for 3D input. For 2D input,
-            rows past ``offs[-1]`` are left uninitialized; callers must mask
-            or discard them.
+            ``(num_groups, M_g, out_features)`` for 3D input. The output dtype
+            is the dtype requested for ``down_proj`` when provided; otherwise
+            it is the dtype produced by the activation. For 2D input, rows
+            past ``offs[-1]`` are left uninitialized; callers must mask or
+            discard them.
 
         """
-        return self.down_proj(self.activation(self.up_proj(input, offs=offs)), offs=offs)
+        up_out_dtype, down_out_dtype = out_dtype if isinstance(out_dtype, tuple) else (out_dtype, out_dtype)
+        hidden = self.activation(self.up_proj(input, offs=offs, out_dtype=up_out_dtype))
+        return self.down_proj(hidden, offs=offs, out_dtype=down_out_dtype)
 
     def extra_repr(self: Self) -> str:
         """
@@ -543,7 +558,13 @@ class GatedGroupedFeedForward(torch.nn.Module):
         self.activation = activation()
         self.down_proj = GroupedLinear(num_groups, hidden_features, out_features, bias=down_bias, **factory_kwargs)
 
-    def forward(self: Self, input: torch.Tensor, *, offs: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(
+        self: Self,
+        input: torch.Tensor,
+        *,
+        offs: torch.Tensor | None = None,
+        out_dtype: DType | tuple[DType, DType] = None,
+    ) -> torch.Tensor:
         """
         Run the forward pass.
 
@@ -554,16 +575,23 @@ class GatedGroupedFeedForward(torch.nn.Module):
                 ``None``.
             offs: Optional offsets of shape ``(num_groups,)``. Required for
                 2D input and forbidden for 3D input.
+            out_dtype: Optional output dtype for the projections. A scalar or
+                ``None`` applies to both; a two-element tuple sets
+                ``gate_up_proj`` and ``down_proj`` separately. ``None``
+                follows each projection's input dtype.
 
         Returns:
             The output tensor of shape ``(M, out_features)`` for 2D input, or
-            ``(num_groups, M_g, out_features)`` for 3D input. For 2D input,
-            rows past ``offs[-1]`` are left uninitialized; callers must mask
-            or discard them.
+            ``(num_groups, M_g, out_features)`` for 3D input. The output dtype
+            is the dtype requested for ``down_proj`` when provided; otherwise
+            it is the dtype produced by the activation. For 2D input, rows
+            past ``offs[-1]`` are left uninitialized; callers must mask or
+            discard them.
 
         """
-        gate, up = self.gate_up_proj(input, offs=offs).tensor_split(2, dim=-1)
-        return self.down_proj(self.activation(gate) * up, offs=offs)
+        gate_up_out_dtype, down_out_dtype = out_dtype if isinstance(out_dtype, tuple) else (out_dtype, out_dtype)
+        gate, up = self.gate_up_proj(input, offs=offs, out_dtype=gate_up_out_dtype).tensor_split(2, dim=-1)
+        return self.down_proj(self.activation(gate) * up, offs=offs, out_dtype=down_out_dtype)
 
     def extra_repr(self: Self) -> str:
         """

@@ -19,6 +19,7 @@ from mokit.components.feed_forward import (
     GroupedFeedForward,
 )
 from mokit.components.linear import GroupedLinear
+from mokit.types import DType
 
 # ==============================================================================
 # FeedForward
@@ -863,6 +864,53 @@ def test_grouped_feed_forward_forward_preserves_dtype(
     assert module(input, offs=offs).dtype is dtype
 
 
+@pytest.mark.parametrize(
+    "out_dtype",
+    [
+        pytest.param(torch.bfloat16, id="scalar"),
+        pytest.param((torch.bfloat16, torch.bfloat16), id="pair"),
+        pytest.param((torch.bfloat16, None), id="down_none"),
+        pytest.param((None, torch.bfloat16), id="up_none"),
+    ],
+)
+def test_grouped_feed_forward_forward_accepts_valid_out_dtype(out_dtype: DType | tuple[DType, DType]) -> None:
+    """Test that a valid out_dtype preserves the output dtype and values."""
+    module = GroupedFeedForward(3, 8, 16, 4, dtype=torch.bfloat16)
+    input = torch.randn(10, 8, dtype=torch.bfloat16)
+    offs = torch.tensor([2, 5, 10], dtype=torch.int32)
+
+    expected = module(input, offs=offs)
+    output = module(input, offs=offs, out_dtype=out_dtype)
+
+    assert output.dtype is torch.bfloat16
+    torch.testing.assert_close(output, expected)
+
+
+@pytest.mark.parametrize(
+    "out_dtype",
+    [
+        pytest.param((torch.float32, torch.bfloat16), id="up_mismatch"),
+        pytest.param((torch.bfloat16, torch.float32), id="down_mismatch"),
+    ],
+)
+def test_grouped_feed_forward_forward_rejects_mismatched_out_dtype(
+    out_dtype: DType | tuple[DType, DType],
+) -> None:
+    """
+    Test that a mismatched out_dtype is rejected by the current GEMM kernels.
+
+    This is a known constraint of the grouped GEMM kernels. If the constraint
+    is relaxed in the future, this test will fail and the parameter should be
+    moved to ``test_grouped_feed_forward_forward_accepts_valid_out_dtype``.
+    """
+    module = GroupedFeedForward(3, 8, 16, 4, dtype=torch.bfloat16)
+    input = torch.randn(10, 8, dtype=torch.bfloat16)
+    offs = torch.tensor([2, 5, 10], dtype=torch.int32)
+
+    with pytest.raises(RuntimeError, match="output dtype must match"):
+        module(input, offs=offs, out_dtype=out_dtype)
+
+
 def test_grouped_feed_forward_forward_rejects_wrong_input_width() -> None:
     """Test that the up projection rejects an input whose last dimension is not in_features."""
     module = GroupedFeedForward(3, 8, 16, 4)
@@ -1297,6 +1345,53 @@ def test_gated_grouped_feed_forward_forward_preserves_dtype(
     offs = torch.tensor([2, 5, 10], dtype=torch.int32)
 
     assert module(input, offs=offs).dtype is dtype
+
+
+@pytest.mark.parametrize(
+    "out_dtype",
+    [
+        pytest.param(torch.bfloat16, id="scalar"),
+        pytest.param((torch.bfloat16, torch.bfloat16), id="pair"),
+        pytest.param((torch.bfloat16, None), id="down_none"),
+        pytest.param((None, torch.bfloat16), id="gate_up_none"),
+    ],
+)
+def test_gated_grouped_feed_forward_forward_accepts_valid_out_dtype(out_dtype: DType | tuple[DType, DType]) -> None:
+    """Test that a valid out_dtype preserves the output dtype and values."""
+    module = GatedGroupedFeedForward(3, 8, 16, 4, dtype=torch.bfloat16)
+    input = torch.randn(10, 8, dtype=torch.bfloat16)
+    offs = torch.tensor([2, 5, 10], dtype=torch.int32)
+
+    expected = module(input, offs=offs)
+    output = module(input, offs=offs, out_dtype=out_dtype)
+
+    assert output.dtype is torch.bfloat16
+    torch.testing.assert_close(output, expected)
+
+
+@pytest.mark.parametrize(
+    "out_dtype",
+    [
+        pytest.param((torch.float32, torch.bfloat16), id="gate_up_mismatch"),
+        pytest.param((torch.bfloat16, torch.float32), id="down_mismatch"),
+    ],
+)
+def test_gated_grouped_feed_forward_forward_rejects_mismatched_out_dtype(
+    out_dtype: DType | tuple[DType, DType],
+) -> None:
+    """
+    Test that a mismatched out_dtype is rejected by the current GEMM kernels.
+
+    This is a known constraint of the grouped GEMM kernels. If the constraint
+    is relaxed in the future, this test will fail and the parameter should be
+    moved to ``test_gated_grouped_feed_forward_forward_accepts_valid_out_dtype``.
+    """
+    module = GatedGroupedFeedForward(3, 8, 16, 4, dtype=torch.bfloat16)
+    input = torch.randn(10, 8, dtype=torch.bfloat16)
+    offs = torch.tensor([2, 5, 10], dtype=torch.int32)
+
+    with pytest.raises(RuntimeError, match="output dtype must match"):
+        module(input, offs=offs, out_dtype=out_dtype)
 
 
 def test_gated_grouped_feed_forward_forward_rejects_wrong_input_width() -> None:
