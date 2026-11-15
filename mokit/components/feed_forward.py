@@ -9,6 +9,8 @@ from typing import ClassVar, Self
 import torch
 from torch.types import Device
 
+from mokit.components.linear import GroupedLinear
+
 
 class FeedForward(torch.nn.Module):
     r"""
@@ -261,4 +263,156 @@ class GatedFeedForward(torch.nn.Module):
         """
         return (
             f"in_features={self.in_features}, hidden_features={self.hidden_features}, out_features={self.out_features}"
+        )
+
+
+class GroupedFeedForward(torch.nn.Module):
+    r"""
+    A feed-forward network with a separate weight per group.
+
+    This module computes
+    :math:`y_g = W_\text{down}^{(g)} \phi(W_\text{up}^{(g)} x_g + b_\text{up}^{(g)}) + b_\text{down}^{(g)}`
+    for each group :math:`g`, where :math:`\phi` is the activation.
+
+    Args:
+        num_groups: Number of groups (independent expert weights).
+        in_features: Size of each input sample.
+        hidden_features: Size of each group's hidden dimension.
+        out_features: Size of each output sample.
+        activation: The activation module type or factory. It is called with
+            no arguments, and the resulting module is applied to the hidden
+            projection. It does not receive ``offs``, so it cannot skip rows
+            past ``offs[-1]``. To configure the activation, pass a factory
+            such as ``functools.partial(torch.nn.SiLU, inplace=True)``.
+            Default: ``torch.nn.SiLU``
+        bias: A boolean sets the bias of both projections; a two-element tuple
+            sets the bias of ``up_proj`` and ``down_proj`` separately.
+            Default: ``True``
+        device: The device of the parameters. Default: ``None``
+        dtype: The dtype of the parameters. Default: ``None``
+
+    Shape:
+        - Input, 2D: :math:`(M, H_\text{in})` together with ``offs`` of shape
+          :math:`(G,)`, where :math:`M` is the total number of rows and
+          :math:`G = \text{num\_groups}`. Group ``g`` owns rows
+          ``[offs[g - 1], offs[g])``, with the lower bound of group 0 equal to
+          0.
+        - Input, 3D: :math:`(G, M_g, H_\text{in})`, where every group has the
+          same number of rows and ``offs`` must be ``None``.
+        - Output: :math:`(M, H_\text{out})` for 2D input, or
+          :math:`(G, M_g, H_\text{out})` for 3D input, where
+          :math:`H_\text{in} = \text{in\_features}` and
+          :math:`H_\text{out} = \text{out\_features}`.
+
+    Attributes:
+        num_groups: Number of groups.
+        in_features: Size of each input sample.
+        hidden_features: Size of each group's hidden dimension.
+        out_features: Size of each output sample.
+        up_proj: The ``GroupedLinear`` projection from ``in_features`` to
+            ``hidden_features``.
+        activation: The activation module applied to the hidden projection.
+            It does not receive ``offs``.
+        down_proj: The ``GroupedLinear`` projection from ``hidden_features``
+            to ``out_features``.
+
+    Note:
+        For 2D input, rows past ``offs[-1]`` are left uninitialized. The
+        activation is applied to the entire tensor produced by ``up_proj``,
+        including those tail rows, because it does not receive ``offs`` and
+        therefore cannot skip them. Callers must mask or discard the tail rows.
+
+    Warning:
+        The grouped GEMM kernels used by the two projections have alignment
+        and stride requirements. Since the intermediate tensor produced by
+        ``up_proj`` is passed directly to ``down_proj``, choose the dimension
+        sizes so that both projections satisfy those requirements, and consult
+        the kernel's documentation for the exact constraints.
+
+    Examples::
+
+        >>> m = GroupedFeedForward(3, 20, 64, 30)
+        >>> input = torch.randn(10, 20)
+        >>> offs = torch.tensor([2, 5, 10], dtype=torch.int32)
+        >>> output = m(input, offs=offs)
+        >>> print(output.size())
+        torch.Size([10, 30])
+
+    """
+
+    __constants__: ClassVar[list[str]] = ["num_groups", "in_features", "hidden_features", "out_features"]
+
+    def __init__(
+        self: Self,
+        num_groups: int,
+        in_features: int,
+        hidden_features: int,
+        out_features: int,
+        activation: Callable[..., torch.nn.Module] = torch.nn.SiLU,
+        bias: bool | tuple[bool, bool] = True,
+        device: Device = None,
+        dtype: torch.dtype | None = None,
+    ) -> None:
+        """
+        Initialize the grouped feed-forward network.
+
+        Args:
+            num_groups: Number of groups (independent expert weights).
+            in_features: Size of each input sample.
+            hidden_features: Size of each group's hidden dimension.
+            out_features: Size of each output sample.
+            activation: The activation module type or factory.
+            bias: A boolean sets the bias of both projections; a two-element
+                tuple sets the bias of ``up_proj`` and ``down_proj``
+                separately. Default: ``True``
+            device: The device of the parameters.
+            dtype: The dtype of the parameters.
+
+        Raises:
+            ValueError: If ``bias`` is a tuple whose length is not 2.
+
+        """
+        super().__init__()
+        factory_kwargs = {"device": device, "dtype": dtype}
+        up_bias, down_bias = (bias, bias) if isinstance(bias, bool) else bias
+        self.num_groups = num_groups
+        self.in_features = in_features
+        self.hidden_features = hidden_features
+        self.out_features = out_features
+        self.up_proj = GroupedLinear(num_groups, in_features, hidden_features, bias=up_bias, **factory_kwargs)
+        self.activation = activation()
+        self.down_proj = GroupedLinear(num_groups, hidden_features, out_features, bias=down_bias, **factory_kwargs)
+
+    def forward(self: Self, input: torch.Tensor, *, offs: torch.Tensor | None = None) -> torch.Tensor:
+        """
+        Run the forward pass.
+
+        Args:
+            input: The input tensor. A 2D input of shape
+                ``(M, in_features)`` requires ``offs``. A 3D input of shape
+                ``(num_groups, M_g, in_features)`` requires ``offs`` to be
+                ``None``.
+            offs: Optional offsets of shape ``(num_groups,)``. Required for
+                2D input and forbidden for 3D input.
+
+        Returns:
+            The output tensor of shape ``(M, out_features)`` for 2D input, or
+            ``(num_groups, M_g, out_features)`` for 3D input. For 2D input,
+            rows past ``offs[-1]`` are left uninitialized; callers must mask
+            or discard them.
+
+        """
+        return self.down_proj(self.activation(self.up_proj(input, offs=offs)), offs=offs)
+
+    def extra_repr(self: Self) -> str:
+        """
+        Return the extra representation of the module.
+
+        Returns:
+            A string describing the module configuration.
+
+        """
+        return (
+            f"num_groups={self.num_groups}, in_features={self.in_features}, "
+            f"hidden_features={self.hidden_features}, out_features={self.out_features}"
         )
