@@ -12,7 +12,8 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from mokit.components.feed_forward import FeedForward, GatedFeedForward
+from mokit.components.feed_forward import FeedForward, GatedFeedForward, GroupedFeedForward
+from mokit.components.linear import GroupedLinear
 
 # ==============================================================================
 # FeedForward
@@ -549,3 +550,414 @@ def test_gated_feed_forward_extra_repr_reports_configuration() -> None:
     module = GatedFeedForward(3, 5, 4)
 
     assert module.extra_repr() == "in_features=3, hidden_features=5, out_features=4"
+
+
+# ==============================================================================
+# GroupedFeedForward
+# ==============================================================================
+
+
+# ------------------------------------------------------------------------------
+# __init__
+# ------------------------------------------------------------------------------
+
+
+def test_grouped_feed_forward_init_stores_dimensions_and_projections() -> None:
+    """Test that __init__ stores the dimensions and creates both projections."""
+    module = GroupedFeedForward(3, 8, 16, 4)
+
+    assert module.num_groups == 3
+    assert module.in_features == 8
+    assert module.hidden_features == 16
+    assert module.out_features == 4
+    assert isinstance(module.up_proj, GroupedLinear)
+    assert module.up_proj.num_groups == 3
+    assert module.up_proj.in_features == 8
+    assert module.up_proj.out_features == 16
+    assert isinstance(module.down_proj, GroupedLinear)
+    assert module.down_proj.num_groups == 3
+    assert module.down_proj.in_features == 16
+    assert module.down_proj.out_features == 4
+
+
+def test_grouped_feed_forward_init_registers_default_activation() -> None:
+    """Test that the default activation is a registered SiLU module."""
+    module = GroupedFeedForward(3, 8, 16, 4)
+
+    assert isinstance(module.activation, torch.nn.SiLU)
+    assert dict(module.named_modules())["activation"] is module.activation
+
+
+def test_grouped_feed_forward_init_creates_distinct_default_activations() -> None:
+    """Test that each module owns its activation instance."""
+    first = GroupedFeedForward(3, 8, 16, 4)
+    second = GroupedFeedForward(3, 8, 16, 4)
+
+    assert first.activation is not second.activation
+
+
+def test_grouped_feed_forward_init_builds_activation_from_factory() -> None:
+    """Test that activation accepts a module type."""
+    module = GroupedFeedForward(3, 8, 16, 4, activation=torch.nn.GELU)
+
+    assert isinstance(module.activation, torch.nn.GELU)
+
+
+def test_grouped_feed_forward_init_configures_activation_from_partial() -> None:
+    """Test that a partial factory can configure the activation."""
+    module = GroupedFeedForward(3, 8, 16, 4, activation=partial(torch.nn.SiLU, inplace=True))
+
+    assert isinstance(module.activation, torch.nn.SiLU)
+    assert module.activation.inplace
+
+
+def test_grouped_feed_forward_init_default_bias_applies_to_both_projections() -> None:
+    """Test that the default bias appears on both projections."""
+    module = GroupedFeedForward(3, 8, 16, 4)
+
+    assert module.up_proj.bias is not None
+    assert module.up_proj.bias.shape == (48,)
+    assert module.down_proj.bias is not None
+    assert module.down_proj.bias.shape == (12,)
+
+
+def test_grouped_feed_forward_init_no_bias_removes_both_projection_biases() -> None:
+    """Test that bias=False removes the bias from both projections."""
+    module = GroupedFeedForward(3, 8, 16, 4, bias=False)
+
+    assert module.up_proj.bias is None
+    assert module.down_proj.bias is None
+    assert sorted(module.state_dict()) == ["down_proj.weight", "up_proj.weight"]
+
+
+@pytest.mark.parametrize(
+    "bias",
+    [(True, False), (False, True), (False, False)],
+    ids=["up_only", "down_only", "neither"],
+)
+def test_grouped_feed_forward_init_applies_tuple_bias_per_projection(bias: tuple[bool, bool]) -> None:
+    """Test that a two-element tuple sets each projection's bias separately."""
+    module = GroupedFeedForward(3, 8, 16, 4, bias=bias)
+
+    assert (module.up_proj.bias is not None) is bias[0]
+    assert (module.down_proj.bias is not None) is bias[1]
+    assert ("down_proj.bias" in module.state_dict()) is bias[1]
+
+
+@pytest.mark.parametrize("bias", [(), (True,), (True, False, True)], ids=["empty", "one", "three"])
+def test_grouped_feed_forward_init_rejects_bias_tuple_of_wrong_length(bias: tuple[bool, ...]) -> None:
+    """Test that a tuple bias must have exactly two elements."""
+    with pytest.raises(ValueError, match="unpack"):
+        GroupedFeedForward(3, 8, 16, 4, bias=cast(tuple[bool, bool], bias))
+
+
+def test_grouped_feed_forward_init_respects_dtype() -> None:
+    """Test that __init__ uses the requested parameter dtype."""
+    module = GroupedFeedForward(3, 8, 16, 4, dtype=torch.float64)
+
+    assert module.up_proj.weight.dtype is torch.float64
+    assert module.down_proj.weight.dtype is torch.float64
+
+
+def test_grouped_feed_forward_init_uses_linear_initialization_bounds() -> None:
+    """Test that each projection uses its own initialization bound."""
+    module = GroupedFeedForward(3, 8, 16, 4)
+
+    assert module.up_proj.weight.abs().max().item() <= 1 / math.sqrt(8)
+    assert module.down_proj.weight.abs().max().item() <= 1 / math.sqrt(16)
+
+
+# ------------------------------------------------------------------------------
+# forward
+# ------------------------------------------------------------------------------
+
+
+def _reference_grouped_feed_forward(
+    module: GroupedFeedForward,
+    input: torch.Tensor,
+    offs: torch.Tensor | None,
+    activation: Callable[[torch.Tensor], torch.Tensor],
+) -> torch.Tensor:
+    """Compute the expected result with independent per-group F.linear calls."""
+    num_groups = module.num_groups
+    up_weight = module.up_proj.weight.reshape(num_groups, module.hidden_features, module.in_features)
+    up_bias = None if module.up_proj.bias is None else module.up_proj.bias.reshape(num_groups, module.hidden_features)
+    down_weight = module.down_proj.weight.reshape(num_groups, module.out_features, module.hidden_features)
+    down_bias = (
+        None if module.down_proj.bias is None else module.down_proj.bias.reshape(num_groups, module.out_features)
+    )
+
+    def run(x_group: torch.Tensor, group: int) -> torch.Tensor:
+        hidden = activation(F.linear(x_group, up_weight[group], None if up_bias is None else up_bias[group]))
+        return F.linear(hidden, down_weight[group], None if down_bias is None else down_bias[group])
+
+    if input.ndim == 3:
+        return torch.stack([run(input[group], group) for group in range(num_groups)])
+
+    assert offs is not None
+    starts = [0, *offs[:-1].tolist()]
+    return torch.cat(
+        [run(input[start:end], group) for group, (start, end) in enumerate(zip(starts, offs.tolist(), strict=True))]
+    )
+
+
+@pytest.mark.parametrize("bias", [True, False], ids=["bias", "no_bias"])
+def test_grouped_feed_forward_forward_2d_matches_reference(bias: bool) -> None:
+    """Test that 2D forward matches independent per-group feed-forward blocks."""
+    torch.manual_seed(0)
+    module = GroupedFeedForward(3, 8, 16, 4, bias=bias)
+    input = torch.randn(10, 8)
+    offs = torch.tensor([2, 5, 10], dtype=torch.int32)
+
+    output = module(input, offs=offs)
+    expected = _reference_grouped_feed_forward(module, input, offs, F.silu)
+
+    assert output.shape == (10, 4)
+    torch.testing.assert_close(output, expected)
+
+
+@pytest.mark.parametrize("bias", [True, False], ids=["bias", "no_bias"])
+def test_grouped_feed_forward_forward_3d_matches_reference(bias: bool) -> None:
+    """Test that 3D forward matches independent per-group feed-forward blocks."""
+    torch.manual_seed(0)
+    module = GroupedFeedForward(3, 8, 16, 4, bias=bias)
+    input = torch.randn(3, 4, 8)
+
+    output = module(input)
+    expected = _reference_grouped_feed_forward(module, input, None, F.silu)
+
+    assert output.shape == (3, 4, 4)
+    torch.testing.assert_close(output, expected)
+
+
+@pytest.mark.parametrize(
+    "bias",
+    [(True, False), (False, True)],
+    ids=["up_only", "down_only"],
+)
+def test_grouped_feed_forward_forward_matches_reference_for_bias_configuration(bias: tuple[bool, bool]) -> None:
+    """Test that forward matches the reference for mixed bias configurations."""
+    torch.manual_seed(0)
+    module = GroupedFeedForward(3, 8, 16, 4, bias=bias)
+    input = torch.randn(10, 8)
+    offs = torch.tensor([2, 5, 10], dtype=torch.int32)
+
+    torch.testing.assert_close(
+        module(input, offs=offs),
+        _reference_grouped_feed_forward(module, input, offs, F.silu),
+    )
+
+
+@pytest.mark.parametrize(
+    ("factory", "activation"),
+    [
+        pytest.param(torch.nn.GELU, F.gelu, id="gelu"),
+        pytest.param(partial(torch.nn.SiLU, inplace=True), F.silu, id="inplace_silu"),
+    ],
+)
+def test_grouped_feed_forward_forward_uses_configured_activation(
+    factory: Callable[..., torch.nn.Module],
+    activation: Callable[[torch.Tensor], torch.Tensor],
+) -> None:
+    """Test that forward applies the configured activation."""
+    torch.manual_seed(0)
+    module = GroupedFeedForward(3, 8, 16, 4, activation=factory)
+    input = torch.randn(10, 8)
+    offs = torch.tensor([2, 5, 10], dtype=torch.int32)
+
+    torch.testing.assert_close(
+        module(input, offs=offs),
+        _reference_grouped_feed_forward(module, input, offs, activation),
+    )
+
+
+@pytest.mark.parametrize(
+    "offs_values",
+    [[0, 5, 10], [2, 2, 10], [2, 10, 10]],
+    ids=["first_empty", "middle_empty", "last_empty"],
+)
+def test_grouped_feed_forward_forward_supports_empty_groups(offs_values: list[int]) -> None:
+    """Test that groups with no rows are handled correctly."""
+    torch.manual_seed(0)
+    module = GroupedFeedForward(3, 8, 16, 4)
+    input = torch.randn(10, 8)
+    offs = torch.tensor(offs_values, dtype=torch.int32)
+
+    torch.testing.assert_close(
+        module(input, offs=offs),
+        _reference_grouped_feed_forward(module, input, offs, F.silu),
+    )
+
+
+def test_grouped_feed_forward_forward_handles_zero_rows_per_group() -> None:
+    """Test that 3D input with zero rows per group produces an empty output."""
+    module = GroupedFeedForward(3, 8, 16, 4)
+
+    output = module(torch.empty(3, 0, 8))
+
+    assert output.shape == (3, 0, 4)
+
+
+def test_grouped_feed_forward_forward_handles_empty_input() -> None:
+    """Test that an empty 2D input produces an empty output."""
+    module = GroupedFeedForward(3, 8, 16, 4)
+    offs = torch.tensor([0, 0, 0], dtype=torch.int32)
+
+    output = module(torch.empty(0, 8), offs=offs)
+
+    assert output.shape == (0, 4)
+
+
+@pytest.mark.parametrize(
+    "offs_values",
+    [[2, 5, 8], [2, 5, 5]],
+    ids=["normal_tail", "empty_last_group"],
+)
+def test_grouped_feed_forward_forward_matches_reference_before_tail(offs_values: list[int]) -> None:
+    """Test that rows before offs[-1] match the per-group reference."""
+    torch.manual_seed(0)
+    module = GroupedFeedForward(3, 8, 16, 4)
+    input = torch.randn(10, 8)
+    offs = torch.tensor(offs_values, dtype=torch.int32)
+
+    output = module(input, offs=offs)
+    expected = _reference_grouped_feed_forward(module, input, offs, F.silu)
+
+    assert output.shape == (10, 4)
+    torch.testing.assert_close(output[: offs[-1].item()], expected)
+
+
+def test_grouped_feed_forward_forward_handles_all_rows_as_tail() -> None:
+    """Test that offsets ending at zero leave every output row unspecified."""
+    module = GroupedFeedForward(3, 8, 16, 4)
+    input = torch.randn(10, 8)
+    offs = torch.tensor([0, 0, 0], dtype=torch.int32)
+
+    output = module(input, offs=offs)
+
+    assert output.shape == (10, 4)
+
+
+@pytest.mark.parametrize(
+    ("dtype", "in_features", "hidden_features"),
+    [
+        pytest.param(torch.float32, 8, 16, id="fp32"),
+        pytest.param(torch.bfloat16, 8, 16, id="bf16"),
+    ],
+)
+def test_grouped_feed_forward_forward_preserves_dtype(
+    dtype: torch.dtype,
+    in_features: int,
+    hidden_features: int,
+) -> None:
+    """Test that forward preserves the parameter dtype."""
+    module = GroupedFeedForward(3, in_features, hidden_features, 4, dtype=dtype)
+    input = torch.randn(10, in_features, dtype=dtype)
+    offs = torch.tensor([2, 5, 10], dtype=torch.int32)
+
+    assert module(input, offs=offs).dtype is dtype
+
+
+def test_grouped_feed_forward_forward_rejects_wrong_input_width() -> None:
+    """Test that the up projection rejects an input whose last dimension is not in_features."""
+    module = GroupedFeedForward(3, 8, 16, 4)
+    offs = torch.tensor([2, 5, 10], dtype=torch.int32)
+
+    with pytest.raises(RuntimeError, match="contraction dimension"):
+        module(torch.randn(10, 12), offs=offs)
+
+
+def test_grouped_feed_forward_forward_rejects_2d_input_without_offs() -> None:
+    """Test that 2D input requires offsets."""
+    module = GroupedFeedForward(3, 8, 16, 4)
+
+    with pytest.raises(RuntimeError, match="provide offsets"):
+        module(torch.randn(10, 8))
+
+
+def test_grouped_feed_forward_forward_rejects_3d_input_with_offs() -> None:
+    """Test that 3D input forbids offsets."""
+    module = GroupedFeedForward(3, 8, 16, 4)
+
+    with pytest.raises(RuntimeError, match="no offset"):
+        module(torch.randn(3, 4, 8), offs=torch.tensor([4, 8, 12], dtype=torch.int32))
+
+
+def test_grouped_feed_forward_forward_rejects_int64_offsets() -> None:
+    """Test that int64 offsets are rejected."""
+    module = GroupedFeedForward(3, 8, 16, 4)
+
+    with pytest.raises(RuntimeError, match="int32"):
+        module(torch.randn(10, 8), offs=torch.tensor([2, 5, 10], dtype=torch.int64))
+
+
+@pytest.mark.parametrize("bias", [True, False], ids=["bias", "no_bias"])
+def test_grouped_feed_forward_forward_backward_computes_gradients_2d(bias: bool) -> None:
+    """Test that 2D forward supports autograd for all parameters."""
+    torch.manual_seed(0)
+    module = GroupedFeedForward(3, 8, 16, 4, bias=bias)
+    input = torch.randn(10, 8, requires_grad=True)
+    offs = torch.tensor([2, 5, 10], dtype=torch.int32)
+
+    output = module(input, offs=offs)
+    output.backward(torch.ones_like(output))
+
+    assert input.grad is not None
+    assert input.grad.shape == input.shape
+    assert module.up_proj.weight.grad is not None
+    assert module.up_proj.weight.grad.shape == module.up_proj.weight.shape
+    assert module.down_proj.weight.grad is not None
+    assert module.down_proj.weight.grad.shape == module.down_proj.weight.shape
+    if bias:
+        assert module.up_proj.bias is not None
+        assert module.up_proj.bias.grad is not None
+        assert module.down_proj.bias is not None
+        assert module.down_proj.bias.grad is not None
+    else:
+        assert module.up_proj.bias is None
+        assert module.down_proj.bias is None
+
+
+def test_grouped_feed_forward_forward_backward_computes_gradients_3d() -> None:
+    """Test that 3D forward supports autograd for all parameters."""
+    torch.manual_seed(0)
+    module = GroupedFeedForward(3, 8, 16, 4)
+    input = torch.randn(3, 4, 8, requires_grad=True)
+
+    output = module(input)
+    output.backward(torch.ones_like(output))
+
+    assert input.grad is not None
+    assert input.grad.shape == input.shape
+    assert module.up_proj.weight.grad is not None
+    assert module.down_proj.weight.grad is not None
+    assert module.up_proj.bias is not None
+    assert module.up_proj.bias.grad is not None
+    assert module.down_proj.bias is not None
+    assert module.down_proj.bias.grad is not None
+
+
+def test_grouped_feed_forward_forward_backward_reaches_activation_parameters() -> None:
+    """Test that autograd reaches parameters of a parameterized activation."""
+    torch.manual_seed(0)
+    module = GroupedFeedForward(3, 8, 16, 4, activation=partial(torch.nn.PReLU, num_parameters=16))
+    activation = module.activation
+    assert isinstance(activation, torch.nn.PReLU)
+    offs = torch.tensor([2, 5, 10], dtype=torch.int32)
+
+    output = module(torch.randn(10, 8), offs=offs)
+    output.backward(torch.ones_like(output))
+
+    assert activation.weight.grad is not None
+
+
+# ------------------------------------------------------------------------------
+# extra_repr
+# ------------------------------------------------------------------------------
+
+
+def test_grouped_feed_forward_extra_repr_reports_configuration() -> None:
+    """Test that extra_repr reports the module configuration."""
+    module = GroupedFeedForward(3, 8, 16, 4)
+
+    assert module.extra_repr() == "num_groups=3, in_features=8, hidden_features=16, out_features=4"
