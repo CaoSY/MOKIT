@@ -114,7 +114,7 @@ def test_topk_expert_selector_init_stores_stable_tie() -> None:
 
 
 def _stable_reference(scores: torch.Tensor, top_k: int) -> tuple[torch.Tensor, torch.Tensor]:
-    """Compute the expected stable top-k weights and indices."""
+    """Compute the expected stable top-k scores and indices."""
     indices = torch.argsort(scores, dim=-1, descending=True, stable=True)[..., :top_k]
     return torch.gather(scores, -1, indices), indices
 
@@ -125,10 +125,10 @@ def test_topk_expert_selector_forward_stable_matches_reference(shape: tuple[int,
     selector = TopKExpertSelector(2, 5)
     scores = torch.randn(*shape)
 
-    weights, indices = selector(scores)
+    selected_scores, indices = selector(scores)
 
-    expected_weights, expected_indices = _stable_reference(scores, 2)
-    assert torch.equal(weights, expected_weights)
+    expected_scores, expected_indices = _stable_reference(scores, 2)
+    assert torch.equal(selected_scores, expected_scores)
     assert torch.equal(indices, expected_indices)
 
 
@@ -137,10 +137,10 @@ def test_topk_expert_selector_forward_stable_selects_largest_scores() -> None:
     selector = TopKExpertSelector(2, 4)
     scores = torch.tensor([[0.0, 1.0, 2.0, 3.0], [3.0, 2.0, 1.0, 0.0]])
 
-    weights, indices = selector(scores)
+    selected_scores, indices = selector(scores)
 
     assert indices.tolist() == [[3, 2], [0, 1]]
-    assert torch.equal(weights, torch.tensor([[3.0, 2.0], [3.0, 2.0]]))
+    assert torch.equal(selected_scores, torch.tensor([[3.0, 2.0], [3.0, 2.0]]))
 
 
 def test_topk_expert_selector_forward_stable_breaks_ties_by_expert_index() -> None:
@@ -148,10 +148,10 @@ def test_topk_expert_selector_forward_stable_breaks_ties_by_expert_index() -> No
     selector = TopKExpertSelector(2, 4)
     scores = torch.tensor([[0.0, 1.0, 1.0, 0.0]])
 
-    weights, indices = selector(scores)
+    selected_scores, indices = selector(scores)
 
     assert indices.tolist() == [[1, 2]]
-    assert torch.equal(weights, torch.tensor([[1.0, 1.0]]))
+    assert torch.equal(selected_scores, torch.tensor([[1.0, 1.0]]))
 
 
 def test_topk_expert_selector_forward_supports_top_k_one() -> None:
@@ -159,10 +159,10 @@ def test_topk_expert_selector_forward_supports_top_k_one() -> None:
     selector = TopKExpertSelector(1, 4)
     scores = torch.tensor([[0.0, 1.0, 2.0, 3.0]])
 
-    weights, indices = selector(scores)
+    selected_scores, indices = selector(scores)
 
     assert indices.tolist() == [[3]]
-    assert torch.equal(weights, torch.tensor([[3.0]]))
+    assert torch.equal(selected_scores, torch.tensor([[3.0]]))
 
 
 def test_topk_expert_selector_forward_supports_all_experts() -> None:
@@ -170,35 +170,35 @@ def test_topk_expert_selector_forward_supports_all_experts() -> None:
     selector = TopKExpertSelector(4, 4)
     scores = torch.tensor([[0.0, 1.0, 2.0, 3.0]])
 
-    weights, indices = selector(scores)
+    selected_scores, indices = selector(scores)
 
     assert indices.tolist() == [[3, 2, 1, 0]]
-    assert torch.equal(weights, torch.tensor([[3.0, 2.0, 1.0, 0.0]]))
+    assert torch.equal(selected_scores, torch.tensor([[3.0, 2.0, 1.0, 0.0]]))
 
 
 def test_topk_expert_selector_forward_stable_bias_uses_biased_selection() -> None:
-    """Test that bias changes selection but not the gathered weights."""
+    """Test that bias changes selection but not the gathered scores."""
     selector = TopKExpertSelector(2, 3, bias=True)
     assert selector.bias is not None
     with torch.no_grad():
         selector.bias.copy_(torch.tensor([0.0, 1.0, 0.0]))
     scores = torch.tensor([[0.9, 0.2, 0.1]])
 
-    weights, indices = selector(scores)
+    selected_scores, indices = selector(scores)
 
     assert indices.tolist() == [[1, 0]]
-    assert torch.equal(weights, torch.tensor([[0.2, 0.9]]))
+    assert torch.equal(selected_scores, torch.tensor([[0.2, 0.9]]))
 
 
 def test_topk_expert_selector_forward_stable_handles_empty_input() -> None:
     """Test that empty scores produce empty outputs."""
     selector = TopKExpertSelector(2, 4)
 
-    weights, indices = selector(torch.empty(0, 4))
+    selected_scores, indices = selector(torch.empty(0, 4))
 
-    assert weights.shape == (0, 2)
+    assert selected_scores.shape == (0, 2)
     assert indices.shape == (0, 2)
-    assert weights.dtype is torch.float32
+    assert selected_scores.dtype is torch.float32
     assert indices.dtype is torch.int64
 
 
@@ -207,19 +207,19 @@ def test_topk_expert_selector_forward_preserves_score_dtype() -> None:
     selector = TopKExpertSelector(2, 4)
     scores = torch.randn(3, 4, dtype=torch.float64)
 
-    weights, indices = selector(scores)
+    selected_scores, indices = selector(scores)
 
-    assert weights.dtype is torch.float64
+    assert selected_scores.dtype is torch.float64
     assert indices.dtype is torch.int64
 
 
 def test_topk_expert_selector_forward_backward_reaches_scores() -> None:
-    """Test that selected weights carry gradients to the score tensor."""
+    """Test that selected scores carry gradients to the score tensor."""
     selector = TopKExpertSelector(2, 4)
     scores = torch.randn(3, 4, requires_grad=True)
 
-    weights, indices = selector(scores)
-    weights.sum().backward()
+    selected_scores, indices = selector(scores)
+    selected_scores.sum().backward()
 
     assert not indices.requires_grad
     assert scores.grad is not None
@@ -233,8 +233,8 @@ def test_topk_expert_selector_forward_bias_has_no_gradient() -> None:
     assert selector.bias is not None
     scores = torch.randn(3, 4, requires_grad=True)
 
-    weights, _ = selector(scores)
-    weights.sum().backward()
+    selected_scores, _ = selector(scores)
+    selected_scores.sum().backward()
 
     assert selector.bias.requires_grad is False
     assert scores.grad is not None
@@ -250,27 +250,27 @@ def test_topk_expert_selector_forward_unstable_matches_topk() -> None:
     selector = TopKExpertSelector(2, 4, stable_tie=False)
     scores = torch.tensor([[0.0, 1.0, 2.0, 3.0], [3.0, 2.0, 1.0, 0.0]])
 
-    weights, indices = selector(scores)
+    selected_scores, indices = selector(scores)
 
     expected_values = torch.topk(scores, 2, dim=-1).values
     assert indices.shape == (2, 2)
-    assert torch.equal(weights, torch.gather(scores, -1, indices))
-    assert torch.equal(weights.sort(dim=-1, descending=True).values, expected_values)
+    assert torch.equal(selected_scores, torch.gather(scores, -1, indices))
+    assert torch.equal(selected_scores.sort(dim=-1, descending=True).values, expected_values)
 
 
 def test_topk_expert_selector_forward_unstable_bias_matches_topk() -> None:
-    """Test that unstable selection uses biased scores but returns unbiased weights."""
+    """Test that unstable selection uses biased scores but returns unbiased scores."""
     selector = TopKExpertSelector(2, 3, bias=True, stable_tie=False)
     assert selector.bias is not None
     with torch.no_grad():
         selector.bias.copy_(torch.tensor([0.0, 1.0, 0.0]))
     scores = torch.tensor([[0.9, 0.2, 0.1]])
 
-    weights, indices = selector(scores)
+    selected_scores, indices = selector(scores)
 
     selection_scores = scores + selector.bias
     expected_values = torch.topk(selection_scores, 2, dim=-1).values
-    assert torch.equal(weights, torch.gather(scores, -1, indices))
+    assert torch.equal(selected_scores, torch.gather(scores, -1, indices))
     assert torch.equal(
         torch.gather(selection_scores, -1, indices).sort(dim=-1, descending=True).values,
         expected_values,
@@ -410,12 +410,12 @@ def test_topk_token_router_forward_matches_reference(shape: tuple[int, ...]) -> 
     router = TopKTokenRouter(4, 8, 2)
     input = torch.randn(*shape)
 
-    weights, indices = router(input)
+    selected_scores, indices = router(input)
 
-    expected_weights, expected_indices = _router_reference(router, input)
-    assert weights.dtype is torch.float32
+    expected_scores, expected_indices = _router_reference(router, input)
+    assert selected_scores.dtype is torch.float32
     assert indices.dtype is torch.int64
-    torch.testing.assert_close(weights, expected_weights)
+    torch.testing.assert_close(selected_scores, expected_scores)
     assert torch.equal(indices, expected_indices)
 
 
@@ -431,20 +431,20 @@ def test_topk_token_router_forward_uses_custom_modules() -> None:
     )
     input = torch.randn(3, 8)
 
-    weights, indices = router(input)
+    selected_scores, indices = router(input)
 
     logits = router.gate_proj(input)
     assert indices.shape == (3, 2)
-    torch.testing.assert_close(weights, torch.gather(logits, -1, indices).softmax(dim=-1))
+    torch.testing.assert_close(selected_scores, torch.gather(logits, -1, indices).softmax(dim=-1))
 
 
 def test_topk_token_router_forward_handles_empty_input() -> None:
     """Test that an empty input produces empty outputs."""
     router = TopKTokenRouter(4, 8, 2)
 
-    weights, indices = router(torch.empty(0, 8))
+    selected_scores, indices = router(torch.empty(0, 8))
 
-    assert weights.shape == (0, 2)
+    assert selected_scores.shape == (0, 2)
     assert indices.shape == (0, 2)
 
 
@@ -457,12 +457,12 @@ def test_topk_token_router_forward_rejects_wrong_input_width() -> None:
 
 
 def test_topk_token_router_forward_backward_computes_gradients() -> None:
-    """Test that router weights carry gradients back through selection."""
+    """Test that router scores carry gradients back through selection."""
     router = TopKTokenRouter(4, 8, 2)
     input = torch.randn(3, 8, requires_grad=True)
 
-    weights, indices = router(input)
-    weights.sum().backward()
+    selected_scores, indices = router(input)
+    selected_scores.sum().backward()
 
     assert not indices.requires_grad
     assert input.grad is not None
