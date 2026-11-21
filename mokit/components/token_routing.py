@@ -36,7 +36,7 @@ class TopKExpertSelector(torch.nn.Module):
 
     The selector operates on scores, not logits; scoring and normalization are
     handled by the caller. When a selection bias is enabled, it is added only to
-    the scores used for selection. Returned weights are always gathered from the
+    the scores used for selection. Returned scores are always gathered from the
     unbiased ``scores``.
 
     Args:
@@ -55,7 +55,7 @@ class TopKExpertSelector(torch.nn.Module):
 
     Shape:
         - Input: ``scores`` of shape ``(*, num_experts)``.
-        - Output: ``(topk_weights, topk_indices)``, both of shape
+        - Output: ``(topk_scores, topk_indices)``, both of shape
           ``(*, top_k)``.
 
     Attributes:
@@ -142,9 +142,9 @@ class TopKExpertSelector(torch.nn.Module):
 
         When the instance attribute ``self.stable_tie`` is ``True`` and a
         selection bias is enabled, the indices follow descending biased-score
-        order, with ties favoring the lower expert index. The weights are
-        gathered from the unbiased ``scores`` in that same index order, so they
-        may not be descending by their own values. Without a bias,
+        order, with ties favoring the lower expert index. The selected scores
+        are gathered from the unbiased ``scores`` in that same index order, so
+        they may not be descending by their own values. Without a bias,
         ``self.stable_tie=True`` returns scores in descending order.
 
         When ``self.stable_tie`` is ``False``, the selector uses
@@ -156,8 +156,8 @@ class TopKExpertSelector(torch.nn.Module):
             scores: The score matrix of shape ``(*, num_experts)``.
 
         Returns:
-            A tuple ``(topk_weights, topk_indices)``, both of shape
-            ``(*, top_k)``. The weights are gathered from the unbiased scores.
+            A tuple ``(topk_scores, topk_indices)``, both of shape
+            ``(*, top_k)``. The scores are gathered from the unbiased scores.
 
         Side Effects:
             When ``self.expert_count`` is not ``None`` and gradients are
@@ -169,13 +169,13 @@ class TopKExpertSelector(torch.nn.Module):
         if self.stable_tie:
             selection_scores = scores if self.bias is None else scores + self.bias
             topk_indices = torch.argsort(selection_scores, dim=-1, descending=True, stable=True)[..., : self.top_k]
-            topk_weights = torch.gather(scores, -1, topk_indices)
+            topk_scores = torch.gather(scores, -1, topk_indices)
         elif self.bias is None:
-            topk_weights, topk_indices = torch.topk(scores, self.top_k, dim=-1, largest=True, sorted=False)
+            topk_scores, topk_indices = torch.topk(scores, self.top_k, dim=-1, largest=True, sorted=False)
         else:
             selection_scores = scores + self.bias
             _, topk_indices = torch.topk(selection_scores, self.top_k, dim=-1, largest=True, sorted=False)
-            topk_weights = torch.gather(scores, -1, topk_indices)
+            topk_scores = torch.gather(scores, -1, topk_indices)
 
         if self.expert_count is not None and torch.is_grad_enabled():
             with torch.no_grad():
@@ -186,7 +186,7 @@ class TopKExpertSelector(torch.nn.Module):
                     torch.ones_like(flattened_topk_indices, dtype=self.expert_count.dtype),
                 )
 
-        return topk_weights, topk_indices
+        return topk_scores, topk_indices
 
     def extra_repr(self) -> str:
         """
@@ -206,9 +206,11 @@ class TopKTokenRouter(torch.nn.Module):
     r"""
     A token-choice top-k router.
 
-    The router projects tokens through a gate, applies the configured score
-    module, selects the top-k experts, and optionally normalizes the selected
-    weights. Scoring, selection, and normalization are separate modules.
+    The router projects tokens through a gate, computes scores, selects the top-k
+    experts, normalizes the selected scores, and returns the ``topk_scores`` and
+    ``topk_indices``. The default normalization is a no-op. ``topk_scores`` serve
+    as the weighting scores for the combine stage. Scoring, selection, and
+    normalization are separate modules.
 
     Args:
         num_experts: Number of experts.
@@ -222,14 +224,14 @@ class TopKTokenRouter(torch.nn.Module):
             ``functools.partial`` to enable selector options such as ``bias``
             and ``stable_tie``. Default: ``TopKExpertSelector``
         normalization: The normalization module type or factory. It is applied
-            to the selected top-k weights. Default: ``torch.nn.Identity``
+            to the selected top-k scores. Default: ``torch.nn.Identity``
         device: The device of the parameters. Default: ``None``
         dtype: The dtype of the gate parameters. Default: ``None``
 
     Shape:
         - Input: :math:`(*, H_\text{in})`, where :math:`H_\text{in} =
           \text{in\_features}`.
-        - Output: a tuple ``(topk_weights, topk_indices)``, both of shape
+        - Output: a tuple ``(topk_scores, topk_indices)``, both of shape
           :math:`(*, k)`, where :math:`k = \text{top\_k}`.
 
     Attributes:
@@ -238,12 +240,12 @@ class TopKTokenRouter(torch.nn.Module):
         top_k: Number of experts selected for each token.
         gate_proj: The projection from ``in_features`` to ``num_experts``.
         score: The score module applied to the gate logits.
-        selector: The module that selects and weights the top-k experts.
-        normalization: The module applied to the selected weights.
+        selector: The module that selects the top-k experts and returns their scores.
+        normalization: The module applied to the selected scores.
 
     Note:
         The selector is constructed with ``top_k``; the router also stores it
-        for introspection and representation. Weight dtype, index order, and tie
+        for introspection and representation. Score dtype, index order, and tie
         handling depend on the configured score, selector, and normalization
         modules; see :class:`TopKExpertSelector` for the default selection
         semantics.
@@ -282,7 +284,7 @@ class TopKTokenRouter(torch.nn.Module):
                 ``functools.partial`` to enable selector options such as
                 ``bias`` and ``stable_tie``. Default: ``TopKExpertSelector``
             normalization: The normalization module type or factory. It is
-                applied to the selected top-k weights. Default: ``torch.nn.Identity``
+                applied to the selected top-k scores. Default: ``torch.nn.Identity``
             device: The device of the parameters. Default: ``None``
             dtype: The dtype of the gate parameters. Default: ``None``
 
@@ -311,17 +313,17 @@ class TopKTokenRouter(torch.nn.Module):
             input: The input tensor of shape ``(*, in_features)``.
 
         Returns:
-            A tuple ``(topk_weights, topk_indices)``. Both tensors have shape
-            ``(*, top_k)``. Weight dtype follows the score and normalization
+            A tuple ``(topk_scores, topk_indices)``. Both tensors have shape
+            ``(*, top_k)``. Score dtype follows the score and normalization
             modules; the defaults produce float32. Index order and tie handling
             depend on the selector's ``stable_tie`` option.
 
         """
         logits = self.gate_proj(input)
         scores = self.score(logits)
-        topk_weights, topk_indices = self.selector(scores)
-        topk_weights = self.normalization(topk_weights)
-        return topk_weights, topk_indices
+        topk_scores, topk_indices = self.selector(scores)
+        topk_scores = self.normalization(topk_scores)
+        return topk_scores, topk_indices
 
     def extra_repr(self: Self) -> str:
         """
