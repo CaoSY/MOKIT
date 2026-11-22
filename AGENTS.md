@@ -1,6 +1,6 @@
 # MOKIT — agent notes
 
-Model Optimization Kit for Inference and Training. Python >= 3.14, PyTorch >= 2.14.
+Model Optimization Kit for Inference and Training. Python >= 3.14, PyTorch >= 2.15.
 Flat layout: the package is `mokit/`, tests are in `tests/`.
 
 This file is the source of truth for agent instructions. `CLAUDE.md` imports it

@@ -1,6 +1,6 @@
 # MOKIT
 
-Model Optimization Kit for Inference and Training. Python >= 3.14, PyTorch >= 2.14.
+Model Optimization Kit for Inference and Training. Python >= 3.14, PyTorch >= 2.15.
 
 ## Installation
 
