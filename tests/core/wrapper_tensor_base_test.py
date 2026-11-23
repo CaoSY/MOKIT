@@ -457,6 +457,8 @@ class _InvalidGradFnWrapper(_Wrapper):
         raise RuntimeError("grad_fn unavailable")
 
 
+# Expected strings embed Tensor reprs, which gain a device suffix on an accelerator; pin the default to CPU.
+@pytest.mark.usefixtures("cpu_default_device")
 def test_repr_defaults() -> None:
     """Test default repr output and the __str__ fallback."""
     wrapper = _Wrapper(torch.tensor([1.0, 2.0]))
@@ -465,6 +467,8 @@ def test_repr_defaults() -> None:
     assert str(wrapper) == expected
 
 
+# Expected strings embed Tensor reprs, which gain a device suffix on an accelerator; pin the default to CPU.
+@pytest.mark.usefixtures("cpu_default_device")
 def test_repr_honors_overridden_flatten_attr_names() -> None:
     """Test that repr uses the runtime class's flatten attribute order."""
     wrapper = _ReorderedWrapper(torch.tensor([1.0, 2.0]))
@@ -487,6 +491,8 @@ def test_repr_formats_field_values_with_repr(tag: object, rendered: str) -> None
     assert rendered in repr(_Wrapper(torch.tensor([1.0, 2.0]), tag))
 
 
+# Expected strings embed Tensor reprs, which gain a device suffix on an accelerator; pin the default to CPU.
+@pytest.mark.usefixtures("cpu_default_device")
 def test_repr_tensor_contents_first() -> None:
     """Test that tensor_contents is placed before the declared fields."""
     wrapper = _Wrapper(torch.tensor([1.0, 2.0]))
@@ -496,6 +502,8 @@ def test_repr_tensor_contents_first() -> None:
     assert wrapper.__repr__(tensor_contents=None) == repr(wrapper)
 
 
+# Expected strings embed Tensor reprs, which gain a device suffix on an accelerator; pin the default to CPU.
+@pytest.mark.usefixtures("cpu_default_device")
 def test_repr_empty_tensor_contents() -> None:
     """Test that an empty tensor_contents is honored like Tensor."""
     wrapper = _Wrapper(torch.tensor([1.0, 2.0]))
@@ -514,6 +522,8 @@ def test_repr_tensor_contents_before_attributes() -> None:
     assert wrapper.__repr__(tensor_contents="custom").startswith("_Wrapper(custom, dtype=torch.float64, payload=")
 
 
+# Expected strings embed Tensor reprs, which gain a device suffix on an accelerator; pin the default to CPU.
+@pytest.mark.usefixtures("cpu_default_device")
 def test_repr_dtype() -> None:
     """Test that a non-default dtype is printed before the declared fields."""
     wrapper = _Wrapper(torch.tensor([1.0, 2.0], dtype=torch.float64))
@@ -564,6 +574,8 @@ def test_repr_device() -> None:
     assert repr(wrapper) == expected
 
 
+# Expected strings embed Tensor reprs, which gain a device suffix on an accelerator; pin the default to CPU.
+@pytest.mark.usefixtures("cpu_default_device")
 def test_repr_requires_grad() -> None:
     """Test that requires_grad is printed before the declared fields."""
     wrapper = _Wrapper(torch.tensor([1.0, 2.0]), requires_grad=True)
@@ -571,6 +583,8 @@ def test_repr_requires_grad() -> None:
     assert repr(wrapper) == expected
 
 
+# Expected strings embed Tensor reprs, which gain a device suffix on an accelerator; pin the default to CPU.
+@pytest.mark.usefixtures("cpu_default_device")
 def test_repr_grad_fn() -> None:
     """Test that grad_fn is printed before the declared fields."""
     wrapper = _GradFnFunction.apply(torch.tensor([1.0, 2.0], requires_grad=True))
@@ -610,6 +624,8 @@ def test_repr_cpp_function_grad_fn() -> None:
     assert repr(wrapper).startswith("CppFunctionWrapper(grad_fn=<op>, payload=")
 
 
+# Expected strings embed Tensor reprs, which gain a device suffix on an accelerator; pin the default to CPU.
+@pytest.mark.usefixtures("cpu_default_device")
 def test_repr_layout() -> None:
     """Test that a non-strided layout is printed."""
     wrapper = _Wrapper(torch.tensor([1.0, 2.0]), layout=torch.sparse_coo)
@@ -619,6 +635,8 @@ def test_repr_layout() -> None:
     )
 
 
+# Expected strings embed Tensor reprs, which gain a device suffix on an accelerator; pin the default to CPU.
+@pytest.mark.usefixtures("cpu_default_device")
 def test_repr_filters_previously_printed_field_names() -> None:
     """Test that declared fields skip names already printed as tensor attributes."""
     rendered = repr(_RequiresGradFieldWrapper(torch.tensor([1.0, 2.0]), requires_grad=True))
@@ -626,6 +644,8 @@ def test_repr_filters_previously_printed_field_names() -> None:
     assert rendered.count("requires_grad=") == 1
 
 
+# The empty wrapper's shell is CPU; pin the default to CPU so the repr omits the device.
+@pytest.mark.usefixtures("cpu_default_device")
 def test_repr_empty_wrapper() -> None:
     """Test that a wrapper with no fields prints empty parentheses."""
     assert repr(_EmptyWrapper()) == "_EmptyWrapper()"
@@ -2483,7 +2503,7 @@ def test_torch_function_exact_handler_forwards_arguments() -> None:
     assert func is torch.neg
     assert types == (sub,)
     assert len(args) == 1 and args[0] is wrapper
-    assert kwargs is None
+    assert not kwargs
 
 
 def test_torch_function_wildcard_handler() -> None:
@@ -2500,7 +2520,7 @@ def test_torch_function_wildcard_handler() -> None:
     assert func is torch.neg
     assert types == (sub,)
     assert len(args) == 1 and args[0] is wrapper
-    assert kwargs is None
+    assert not kwargs
 
 
 def test_torch_function_exact_precedes_wildcard() -> None:
@@ -4487,6 +4507,8 @@ def test_clone_default_handles_empty_wrapper() -> None:
         pytest.param(cast(Any, torch)._mkldnn, id="mkldnn"),
     ],
 )
+# The mkldnn layout is CPU-only; pin the default to CPU.
+@pytest.mark.usefixtures("cpu_default_device")
 def test_clone_default_preserves_non_strided_layout(layout: torch.layout) -> None:
     """Test that clone.default preserves a non-strided outer layout."""
     wrapper = _Wrapper(torch.arange(4, dtype=torch.float32), layout=layout)
@@ -5301,25 +5323,24 @@ def test_to_copy_default_preserves_requires_grad() -> None:
     assert copied.requires_grad
 
 
-@pytest.mark.parametrize(
-    ("source_device", "target_device"),
-    [("cpu", "cuda"), ("cuda", "cpu")],
-)
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires an available GPU")
-def test_to_copy_default_converts_wrapper_between_cpu_and_cuda(
-    source_device: str,
-    target_device: str,
+@pytest.mark.parametrize("source_is_cpu", [True, False])
+@pytest.mark.requires_accelerator
+def test_to_copy_default_converts_wrapper_between_cpu_and_accelerator(
+    device: torch.device,
+    source_is_cpu: bool,
 ) -> None:
-    """Test that _to_copy.default moves a wrapper between CPU and CUDA."""
+    """Test that _to_copy.default moves a wrapper between CPU and the accelerator."""
+    source_device = torch.device("cpu") if source_is_cpu else device
+    target_device = device if source_is_cpu else torch.device("cpu")
     source = torch.arange(4, dtype=torch.float32, device=source_device)
     wrapper = _Wrapper(source, bias=torch.ones(4, device=source_device))
 
-    copied = torch.ops.aten._to_copy.default(wrapper, device=torch.device(target_device))
+    copied = torch.ops.aten._to_copy.default(wrapper, device=target_device)
 
     assert type(copied) is _Wrapper
-    assert copied.device.type == target_device
-    assert copied.payload.device.type == target_device
-    assert copied.bias.device.type == target_device
+    assert copied.device.type == target_device.type
+    assert copied.payload.device.type == target_device.type
+    assert copied.bias.device.type == target_device.type
     assert torch.equal(copied.payload.cpu(), source.cpu())
     assert torch.equal(copied.bias.cpu(), wrapper.bias.cpu())
     assert copied.shape == wrapper.shape
@@ -5430,6 +5451,8 @@ def test_to_copy_default_handles_empty_wrapper() -> None:
         pytest.param(cast(Any, torch)._mkldnn, id="mkldnn"),
     ],
 )
+# The mkldnn layout is CPU-only; pin the default to CPU.
+@pytest.mark.usefixtures("cpu_default_device")
 def test_to_copy_default_preserves_non_strided_layout(layout: torch.layout) -> None:
     """Test that _to_copy.default preserves a non-strided outer layout."""
     wrapper = _Wrapper(torch.arange(4, dtype=torch.float32), layout=layout)
@@ -5472,7 +5495,7 @@ def test_to_copy_default_rejects_unsupported_conversions(
 
 def test_to_copy_default_accepts_pin_memory_and_non_blocking_hints() -> None:
     """Test that _to_copy.default accepts the pin-memory and non-blocking hints."""
-    wrapper = _Wrapper(torch.arange(4, dtype=torch.float32), bias=torch.ones(4))
+    wrapper = _Wrapper(torch.arange(4, dtype=torch.float32, device="cpu"), bias=torch.ones(4, device="cpu"))
 
     copied = torch.ops.aten._to_copy.default(wrapper, pin_memory=True, non_blocking=True)
 
@@ -5482,19 +5505,22 @@ def test_to_copy_default_accepts_pin_memory_and_non_blocking_hints() -> None:
     assert torch.equal(copied.bias, wrapper.bias)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires an available GPU")
-def test_to_copy_default_pins_inner_tensors() -> None:
-    """Test that _to_copy.default pins each CPU inner tensor."""
-    wrapper = _Wrapper(torch.arange(4, dtype=torch.float32), bias=torch.ones(4))
+@pytest.mark.requires_accelerator
+def test_to_copy_default_pins_inner_tensors(device: torch.device) -> None:
+    """Test that _to_copy.default pins each inner tensor copied to CPU."""
+    wrapper = _Wrapper(
+        torch.arange(4, dtype=torch.float32, device=device),
+        bias=torch.ones(4, device=device),
+    )
 
-    copied = torch.ops.aten._to_copy.default(wrapper, pin_memory=True)
+    copied = torch.ops.aten._to_copy.default(wrapper, device="cpu", pin_memory=True, non_blocking=True)
 
     assert type(copied) is _Wrapper
     assert copied.device.type == "cpu"
     assert copied.payload.is_pinned()
     assert copied.bias.is_pinned()
-    assert torch.equal(copied.payload, wrapper.payload)
-    assert torch.equal(copied.bias, wrapper.bias)
+    assert torch.equal(copied.payload, wrapper.payload.cpu())
+    assert torch.equal(copied.bias, wrapper.bias.cpu())
 
 
 def test_to_copy_default_rejects_dispatch_class_mismatch() -> None:
@@ -5997,6 +6023,8 @@ def test_pickle_round_trip_preserves_deeply_nested_wrappers() -> None:
         pytest.param(cast(Any, torch)._mkldnn, id="mkldnn"),
     ],
 )
+# The mkldnn layout is CPU-only; pin the default to CPU.
+@pytest.mark.usefixtures("cpu_default_device")
 def test_pickle_round_trip_supported_layouts(layout: torch.layout) -> None:
     """Test that pickle preserves every supported wrapper layout."""
     wrapper = _Wrapper(torch.arange(4, dtype=torch.float32), tag={"tag": 1}, layout=layout)
@@ -6150,6 +6178,8 @@ def test_deepcopy_preserves_nested_wrapper_and_aliasing() -> None:
         pytest.param(cast(Any, torch)._mkldnn, id="mkldnn"),
     ],
 )
+# The mkldnn layout is CPU-only; pin the default to CPU.
+@pytest.mark.usefixtures("cpu_default_device")
 def test_deepcopy_preserves_non_strided_layout(layout: torch.layout) -> None:
     """Test that deepcopy preserves a non-strided outer layout."""
     wrapper = _Wrapper(torch.arange(4, dtype=torch.float32), layout=layout)
