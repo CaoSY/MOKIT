@@ -472,6 +472,9 @@ class LocalTokenDispatcher(torch.nn.Module):
         torch.floor_divide(perm_indices, tokens_per_expert, out=token_indices)
         repeated_tokens = tokens.index_select(0, token_indices)
 
+        # Permute the scores instead of unpermuting the expert outputs in combine
+        # before weighting: this permutes an (N,) tensor, while the latter would
+        # permute an (N, H_out) tensor.
         permuted_expert_scores = expert_scores[perm_indices]
 
         # Fixed-bin histc computes expert counts without a host sync;
