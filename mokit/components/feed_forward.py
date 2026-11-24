@@ -13,7 +13,11 @@ from mokit.components.linear import GroupedLinear
 from mokit.types import DType
 
 
-class FeedForward(torch.nn.Module):
+class FeedForwardBase(torch.nn.Module):
+    """The base class for feed-forward networks that apply one set of weights to all input rows."""
+
+
+class FeedForward(FeedForwardBase):
     r"""
     A feed-forward network with an activation between two linear projections.
 
@@ -134,7 +138,7 @@ class FeedForward(torch.nn.Module):
         )
 
 
-class GatedFeedForward(torch.nn.Module):
+class GatedFeedForward(FeedForwardBase):
     r"""
     A gated feed-forward network with a fused gate and up projection.
 
@@ -267,7 +271,11 @@ class GatedFeedForward(torch.nn.Module):
         )
 
 
-class GroupedFeedForward(torch.nn.Module):
+class GroupedFeedForwardBase(torch.nn.Module):
+    """The base class for feed-forward networks that apply one set of weights per group."""
+
+
+class GroupedFeedForward(GroupedFeedForwardBase):
     r"""
     A feed-forward network with a separate weight per group.
 
@@ -433,7 +441,7 @@ class GroupedFeedForward(torch.nn.Module):
         )
 
 
-class GatedGroupedFeedForward(torch.nn.Module):
+class GatedGroupedFeedForward(GroupedFeedForwardBase):
     r"""
     A gated feed-forward network with a separate fused weight per group.
 
